@@ -4,6 +4,7 @@ Thread/async safe via a process-wide lock. Uses WAL mode for concurrent reads
 while writes are serialized.
 """
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -193,6 +194,41 @@ def _ensure_bootstrap():
         hp = _sec.hash_password("")
         set_admin("TiTaN", hp["hash"], hp["salt"])
         set_meta("auth_is_default", "1")
+        # start of the no-password window (app.main._first_run_state)
+        set_meta("auth_default_since", str(time.time()))
+
+
+def apply_env_admin_password() -> bool:
+    """Seed or recover the admin credential from TITAN_ADMIN_PASSWORD.
+
+    Two jobs. On a fresh deploy it closes the no-password window before the
+    platform routes traffic to the container. And it stays honoured on every boot,
+    which is the documented way back in for someone who let the window expire or
+    lost the password - set the variable, redeploy, log in. Nothing is wiped.
+
+    A short value is ignored rather than applied: a 4-character password reached
+    through the same public URL is worse than the window it closes.
+    """
+    from . import config, security as _sec
+    pw = config.ADMIN_PASSWORD or ""
+    if not pw:
+        return False
+    log = logging.getLogger("titan.db")
+    if len(pw) < 8:
+        log.error("TITAN_ADMIN_PASSWORD is shorter than 8 characters - ignored; "
+                  "the first-run login stays bounded by TITAN_DEFAULT_LOGIN_HOURS")
+        return False
+    was_default = get_meta("auth_is_default") == "1"
+    admin = get_admin()
+    hp = _sec.hash_password(pw)
+    set_admin(admin["username"] if admin else "TiTaN", hp["hash"], hp["salt"])
+    set_meta("auth_is_default", "0")
+    # a platform deploy shows WARNING by default, and "I closed the open door"
+    # is the line an operator needs to see in the Railway log
+    log.log(logging.WARNING if was_default else logging.INFO,
+            "admin password applied from TITAN_ADMIN_PASSWORD%s",
+            "; the no-password first-run login is now closed" if was_default else "")
+    return True
 
 
 def get_meta(key: str) -> str | None:

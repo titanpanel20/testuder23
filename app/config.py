@@ -39,6 +39,40 @@ XRAY_CONFIG_PATH = os.environ.get(
     "TITAN_XRAY_CONFIG", "/usr/local/bin/config.json"
 )
 
+# ------------------------------------------------------------------ first-run credentials
+# A fresh deploy must be reachable without a registration step, so the panel
+# creates admin "TiTaN" with no password. That is also an open door on a public
+# URL, so two knobs bound it:
+#   TITAN_ADMIN_PASSWORD        - set the real password during boot; the door is
+#                                 closed before the platform routes traffic to the
+#                                 container, and it doubles as the recovery path if
+#                                 the window below closes before you claimed it.
+#   TITAN_DEFAULT_LOGIN_HOURS   - how long the no-password login stays accepted
+#                                 (default 24). 0 = closed from the first second,
+#                                 a negative number = never expires (not advised).
+ADMIN_PASSWORD = os.environ.get("TITAN_ADMIN_PASSWORD", "")
+
+
+def _hours_env(name: str, default: float) -> float:
+    """Parse an hours env var without letting a typo stop the boot.
+
+    An unparsable value must not raise at import time: that is exactly how this
+    panel first died on Railway with a useless platform error page.
+    """
+    raw = os.environ.get(name, "")
+    if not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        import logging
+        logging.getLogger("titan.config").warning(
+            "%s=%r is not a number; using %g hours", name, raw, default)
+        return default
+
+
+DEFAULT_LOGIN_HOURS = _hours_env("TITAN_DEFAULT_LOGIN_HOURS", 24.0)
+
 # Public port of the container (Railway/Render inject PORT). Nginx listens here.
 PUBLIC_PORT = int(os.environ.get("PORT", "8000"))
 

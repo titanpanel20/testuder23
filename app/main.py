@@ -63,6 +63,11 @@ async def lifespan(app: FastAPI):
     # config._usable_data_dir() already made this writable (or replaced it with a
     # temp dir and said so loudly), so a bad Volume cannot crash the boot.
     os.makedirs(config.DATA_DIR, exist_ok=True)
+    # Honour TITAN_ADMIN_PASSWORD before the first request can arrive: this both
+    # closes the no-password window on a fresh deploy and recovers access on a
+    # panel whose window (or password) the owner lost.
+    if not config.IS_NODE:
+        db.apply_env_admin_password()
     if not config.IS_NODE:
         # generate the Reality keypair once (no-op without the Xray binary)
         try:
@@ -562,17 +567,32 @@ def _serialize_node(node: dict, status: dict) -> dict:
 # ------------------------------------------------------------------ pages
 @app.get("/", response_class=HTMLResponse)
 async def page_root(request: Request):
-    # Default admin ("TiTaN") is always present — no setup flow.
     if _current_username(request):
         return RedirectResponse("/dashboard")
+    default_auth, seconds_left = _first_run_state()
+    if default_auth and seconds_left != 0:
+        return RedirectResponse("/setup")     # nothing claimed yet -> say so first
     return RedirectResponse("/login")
 
 
 @app.get("/setup", response_class=HTMLResponse)
 async def page_setup(request: Request):
-    # Registration is disabled — the default admin ("TiTaN") is created
-    # automatically on first run. Route everything to the login page.
-    return RedirectResponse("/login")
+    """The claim form, offered only while the panel is still unclaimed.
+
+    templates/setup.html existed but nothing could reach it (POST /api/setup
+    answered "already-configured" because the default admin is always created),
+    which made the first login "TiTaN + no password" the only way in. Claiming is
+    now a real step and it obeys the same window as that login: once the window
+    closes, both routes send you to /login and TITAN_ADMIN_PASSWORD is the way back.
+    """
+    default_auth, seconds_left = _first_run_state()
+    if _current_username(request):
+        return RedirectResponse("/dashboard")
+    if not default_auth or seconds_left == 0:
+        return RedirectResponse("/login")
+    return templates.TemplateResponse(
+        request, "setup.html", {"app_version": APP_VERSION}
+    )
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -603,10 +623,43 @@ async def page_status(request: Request, uid: str):
 
 
 # ------------------------------------------------------------------ auth api
+def _first_run_state() -> tuple[bool, float | None]:
+    """(is_default, seconds_left_of_the_no_password_window).
+
+    The window is measured from the moment the panel created the default admin,
+    so a redeploy of an abandoned unclaimed panel does not hand out a fresh 24
+    hours. `TITAN_DEFAULT_LOGIN_HOURS=0` closes it immediately, a negative value
+    means "never" for anyone who wants the old behaviour on a private network.
+    """
+    default_auth = db.get_meta("auth_is_default") == "1"
+    if not default_auth:
+        return False, None
+    hours = config.DEFAULT_LOGIN_HOURS
+    if hours < 0:
+        return True, None
+    since = None
+    try:
+        since = float(db.get_meta("auth_default_since") or 0) or None
+    except (TypeError, ValueError):
+        since = None
+    if since is None:                      # panel created before this meta existed
+        admin = db.get_admin()
+        since = float(admin["created_at"]) if admin and admin.get("created_at") else time.time()
+        db.set_meta("auth_default_since", str(since))
+    left = since + hours * 3600 - time.time()
+    return True, max(0.0, left)
+
+
 @app.get("/api/setup-status")
 async def api_setup_status():
-    # The default admin is auto-created on first run, so setup is never needed.
-    return {"needs_setup": False}
+    """Is a password still unset, and for how long will that be tolerated?"""
+    default_auth, seconds_left = _first_run_state()
+    return {
+        "needs_setup": default_auth,
+        "default_auth": default_auth,
+        "default_login_open": default_auth and seconds_left != 0,
+        "default_login_seconds_left": seconds_left,
+    }
 
 
 @app.post("/api/setup")
@@ -614,14 +667,20 @@ async def api_setup(request: Request):
     payload = await request.json()
     username = (payload.get("username") or "").strip()
     password = payload.get("password") or ""
-    if db.get_admin():
+    # Claiming the panel is only possible while it is still unclaimed *and* inside
+    # the first-run window, so closing the window also closes this form.
+    default_auth, seconds_left = _first_run_state()
+    if not default_auth:
         raise HTTPException(400, "already-configured")
+    if seconds_left == 0:
+        raise HTTPException(403, "first-run-closed: use TITAN_ADMIN_PASSWORD")
     if not re.match(r"^[a-zA-Z0-9_]{3,32}$", username):
         raise HTTPException(400, "invalid-username")
     if len(password) < 6:
         raise HTTPException(400, "weak-password")
     hp = security.hash_password(password)
     db.set_admin(username, hp["hash"], hp["salt"])
+    db.set_meta("auth_is_default", "0")
     db.add_event("info", "setup", f"admin created: {username}", ip=_client_ip(request))
     resp = JSONResponse({"ok": True})
     _set_session(resp, username)
@@ -652,10 +711,20 @@ async def api_login(request: Request):
     if locked_until > time.time():
         raise HTTPException(429, f"locked:{int(locked_until - time.time())}")
     admin = db.get_admin()
-    default_auth = db.get_meta("auth_is_default") == "1"
+    default_auth, seconds_left = _first_run_state()
     if default_auth and admin:
-        # First-run state: default username "TiTaN", no password required.
-        ok = username == admin["username"]
+        # First-run state: the default username logs in with no password. It used
+        # to accept *any* password here, which made the documented default
+        # credential enough on its own. It is also time-bounded: an abandoned
+        # deploy stops being an open door.
+        if username != admin["username"] or password != "":
+            ok = False
+        elif seconds_left == 0:
+            raise HTTPException(
+                403, "first-run-closed: the no-password window ended; set "
+                     "TITAN_ADMIN_PASSWORD (min 8 chars) and redeploy, then log in with it")
+        else:
+            ok = True
     else:
         ok = bool(admin) and admin["username"] == username and security.verify_password(
             password, admin["salt"], admin["password_hash"]
@@ -710,6 +779,9 @@ async def api_me(request: Request):
         "avatar": _resolve_avatar(settings.get("admin_avatar")),
         "app_version": APP_VERSION,
         "default_auth": db.get_meta("auth_is_default") == "1",
+        # the login page needs this to know whether a password is expected at all
+        "default_login_open": _first_run_state()[1] != 0,
+        "default_login_seconds_left": _first_run_state()[1],
     }
 
 

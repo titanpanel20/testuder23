@@ -326,6 +326,31 @@ window.UI = (() => {
     }
   }
 
+  /* First-run security banner.
+     While the panel has no password, anyone who knows the default username can
+     log in — so this is said on every page, not only inside Settings where
+     nobody looks. The countdown comes from the server, so it cannot drift. */
+  async function firstRunBanner(view) {
+    if (!view || view.dataset.firstRun === '1') return;
+    view.dataset.firstRun = '1';
+    let me = null;
+    try { me = await apiJson('/api/me'); } catch (_) { return; }
+    if (!me || !me.default_auth) return;
+    const secs = Number(me.default_login_seconds_left || 0);
+    const body = secs > 0
+      ? I18N.t('first_run_now') + ' ' + I18N.t('first_run_hours', { h: Math.max(1, Math.ceil(secs / 3600)) })
+      : I18N.t('first_run_closed');
+    const el = document.createElement('div');
+    el.className = 'banner warn';
+    el.innerHTML = `<span class="banner-dot"></span>`
+      + `<span style="flex:1">${esc(body)}</span>`
+      + `<button class="btn sm" data-go-settings>${esc(I18N.t('first_run_set'))}</button>`;
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('[data-go-settings]')) location.hash = '#/settings';
+    });
+    view.prepend(el);
+  }
+
   async function render() {
     route();
     const app = document.querySelector('.app');
@@ -340,6 +365,7 @@ window.UI = (() => {
       }
     }
     I18N.apply();
+    firstRunBanner(view);
     document.title = 'TiTaN — ' + I18N.t(ROUTES[currentRoute].title);
   }
 

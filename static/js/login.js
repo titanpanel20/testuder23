@@ -20,6 +20,9 @@
     const message =
         document.getElementById("message");
 
+    const setupHint =
+        document.getElementById("setupHint");
+
     const loginButton =
         document.getElementById("loginButton");
 
@@ -35,10 +38,16 @@
         fetch("/api/me", { credentials: "same-origin" })
             .then(function (r) { return r.json(); })
             .then(function (data) {
+                if (setupHint) {
+                    setupHint.hidden = !(data.default_auth && data.default_login_open !== false);
+                }
                 if (passwordRow) {
+                    /* Show the box when a password is required: once the panel has
+                       one, or once the no-password window has closed - otherwise the
+                       operator is left staring at a form with nowhere to type it. */
                     passwordRow.classList.toggle(
                         "visible",
-                        data.default_auth === false
+                        data.default_auth === false || data.default_login_open === false
                     );
                 }
             })
@@ -134,6 +143,14 @@
                 const secs = parseInt(detail.split(":")[1] || "60", 10);
                 showMessage(
                     "تلاش‌های زیاد — " + secs + " ثانیه بعد دوباره امتحان کنید.",
+                    "error"
+                );
+            } else if (response.status === 403 && detail.indexOf("first-run-closed") === 0) {
+                if (passwordRow) passwordRow.classList.add("visible");
+                if (password) { password.value = ""; password.focus(); }
+                showMessage(
+                    "مهلت ورود بدون رمز تمام شده. رمز را وارد کن؛ اگر رمزی نگذاشته‌ای، " +
+                    "متغیر TITAN_ADMIN_PASSWORD را در هاست ست کن و سرویس را ری‌استارت کن.",
                     "error"
                 );
             } else if (response.status === 401) {

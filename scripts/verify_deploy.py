@@ -3,8 +3,9 @@
 
 Run against a *live* deployment:  python scripts/verify_deploy.py https://your-panel.up.railway.app
 Order matters: checks that need the first-run (no password) admin run first,
-then the suite locks a real password and tests the brute-force guard, because
-while `auth_is_default` is set ANY password authenticates.
+then the suite locks a real password and tests the brute-force guard. In
+first-run mode login accepts the documented empty password and *nothing else*,
+and only until TITAN_DEFAULT_LOGIN_HOURS has passed since the panel was created.
 """
 import contextlib
 import json
@@ -90,6 +91,29 @@ def main() -> int:
     r = httpx.get(f"{BASE}/health", timeout=8)
     check("[1] /health answers -> app imported, module-level code is valid (the Railway crash)",
           r.status_code == 200, r.text[:160])
+
+    # ------------------------------------------- 1b. first-run credentials
+    st = httpx.get(f"{BASE}/api/setup-status", timeout=8).json()
+    if st.get("default_auth"):
+        empty = httpx.post(f"{BASE}/api/login", json={"username": ADMIN_USER, "password": ""}, timeout=8)
+        bogus = httpx.post(f"{BASE}/api/login",
+                           json={"username": ADMIN_USER, "password": "not-my-password"}, timeout=8)
+        check("[1b] first-run login works with the empty password",
+              empty.status_code == 200, f"HTTP {empty.status_code} {empty.text[:80]}")
+        check("[1c] ...and only with the empty password (no more 'any password')",
+              bogus.status_code == 401, f"HTTP {bogus.status_code}")
+        check("[1d] the window is bounded and reported to the UI",
+              isinstance(st.get("default_login_seconds_left"), (int, float))
+              and st.get("default_login_open") is True, str(st)[:140])
+        # never POST /api/setup here: on a panel the operator has not claimed yet,
+        # a successful claim would set a password this script does not know.
+        page = httpx.get(f"{BASE}/setup", timeout=8, follow_redirects=False)
+        check("[1e] the claim page is reachable while the panel is unclaimed",
+              page.status_code == 200 and "setup" in page.text.lower(), f"HTTP {page.status_code}")
+    else:
+        print("  (note) this panel is already claimed (a password is set) -> first-run checks skipped")
+        if st.get("needs_setup") is False and st.get("default_auth") is False:
+            print("        login with TITAN_ADMIN_PASSWORD is the documented recovery if you lose it")
 
     # -------------------------------------------------------- 2. CSRF (first-run mode)
     attacker = httpx.Client(timeout=10, base_url=BASE, follow_redirects=False)

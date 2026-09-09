@@ -840,9 +840,24 @@ body {
 }
 
 
-/* ============================================================
-   QUICK ACCESS
-============================================================ */
+.setup-hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 14px auto 0;
+    padding: 10px 14px;
+    max-width: 420px;
+    border: 1px solid rgba(231, 170, 44, .4);
+    background: rgba(231, 170, 44, .07);
+    color: var(--text-2, #a6aebc);
+    border-radius: 12px;
+    font-size: .82rem;
+    line-height: 1.8;
+    text-align: right;
+}
+
+.setup-hint[hidden] { display: none; }
+.setup-hint a { color: var(--purple-soft, #c85cff); font-weight: 600; }
 
 .quick-access {
 
