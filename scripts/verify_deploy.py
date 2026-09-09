@@ -24,7 +24,8 @@ BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
 # --skip-raw-probe drops the outbound TCP probe (use it in CI, where the network
 # is not representative of any operator).
 REPO = str(pathlib.Path(__file__).resolve().parent.parent)
-ADMIN_USER = "TiTaN"
+# The default admin name, overridable because /setup lets you pick your own.
+ADMIN_USER = os.environ.get("TITAN_ADMIN_USER", "TiTaN")
 results: list[tuple[bool, str, str]] = []
 
 
@@ -50,9 +51,11 @@ def session(password: str | None = None):
         r = c.post("/api/login", json={"username": ADMIN_USER, "password": pw})
         if r.status_code != 200:
             raise SystemExit(
-                f"login failed (HTTP {r.status_code}). This panel has a password set; run\n"
+                f"login failed (HTTP {r.status_code}) as user {ADMIN_USER!r}. This panel has a "
+                f"password set; run\n"
                 f"  TITAN_ADMIN_PASSWORD='...' python scripts/verify_deploy.py {BASE}\n"
-                f"or against a fresh deploy, where no password is required."
+                f"(plus TITAN_ADMIN_USER='...' if you claimed it under another name),\n"
+                f"or run it against a fresh deploy, where no password is required."
             )
         yield c
 
@@ -349,6 +352,12 @@ def main() -> int:
         # empty is intentionally rejected; leave the password set and say so
         print(f"\n  (note) panel now has a real password; empty-password change -> HTTP {r.status_code}"
               f" {r.text[:60]}  [expected: rejected]")
+        # This script SET that password, so it has to print it - otherwise running
+        # the checks on a live panel locks the operator out of their own panel.
+        print(f"        new admin password (user {ADMIN_USER}): {good_pw}")
+        print("        write it down, or set the same value in TITAN_ADMIN_PASSWORD and restart the")
+        print("        service: the panel re-applies that variable on every boot, so it is also the")
+        print("        documented way back in if you lose this one.")
 
     failed = [n for ok, n, _ in results if not ok]
     print("\n" + "=" * 66)
