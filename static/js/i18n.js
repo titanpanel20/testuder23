@@ -93,7 +93,7 @@ const I18N = (() => {
       group_add: 'Add group', group_edit: 'Edit group', group_remark: 'remark (optional)', group_members: 'Users', group_missing: 'removed', group_include_info: 'include the usage status line', group_rotate: 'Rotate link', group_rotate_confirm: 'The current link stops working and every client must fetch the new one. Continue?', group_delete_confirm: 'Delete the group? Its public link stops working.', group_saved: 'group saved', no_users: 'no users yet',
       subs_title: 'اشتراک‌ها', subs_sub: 'مدیریت اشتراک‌های کاربران',
       sub_link: 'لینک اشتراک', sub_status: 'وضعیت اشتراک', config_count: 'تعداد کانفیگ',
-      copy_sub: 'کپی لینک اشتراک', view: 'مشاهده', revoke: 'ابطال',
+      copy_sub: 'کپی لینک اشتراک', sub_page: 'صفحهٔ وب لینک اشتراک', view: 'مشاهده', revoke: 'ابطال',
       no_subs: 'اشتراکی وجود ندارد',
       // reports
       reports_title: 'گزارش‌ها', reports_sub: 'تحلیل و آمار عملکرد پنل',
@@ -262,7 +262,7 @@ const I18N = (() => {
       node_registered: 'Node connected successfully', node_gen_fail: 'Failed to create token',
       subs_title: 'Subscriptions', subs_sub: 'Manage user subscriptions',
       sub_link: 'Subscription link', sub_status: 'Subscription status', config_count: 'Config count',
-      copy_sub: 'Copy subscription', view: 'View', revoke: 'Revoke',
+      copy_sub: 'Copy subscription', sub_page: 'Subscription web page', view: 'View', revoke: 'Revoke',
       no_subs: 'No subscriptions',
       reports_title: 'Reports', reports_sub: 'Panel performance analytics',
       rep_total_traffic: 'Total traffic', rep_users: 'Users', rep_active: 'Active users',

@@ -1,0 +1,341 @@
+<!doctype html>
+{#
+  Public subscription page. Server-rendered so it is readable with JavaScript
+  disabled and inside a client's in-app webview; JS only adds live numbers,
+  Jalali dates and clipboard buttons. No external asset, no cookie, no CSRF
+  surface: everything a visitor can do here, they can also do by saving the
+  base64 link.
+#}
+<html lang="fa" dir="rtl" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#020812">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="referrer" content="no-referrer">
+  <title>{{ model.title }} — اشتراک {{ panel }}</title>
+  <link rel="icon" type="image/svg+xml" href="/static/img/emblem.svg">
+  <link rel="stylesheet" href="/static/css/fonts.css">
+  <link rel="stylesheet" href="/static/css/dashboard.css">
+  <style>
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); }
+    .sub-bg {
+      position: fixed; inset: 0; z-index: 0; pointer-events: none;
+      background:
+        radial-gradient(60% 40% at 80% -5%, rgba(139, 61, 255, .28), transparent 70%),
+        radial-gradient(50% 40% at 10% 0%, rgba(11, 141, 255, .16), transparent 70%);
+    }
+    html[data-theme="light"] .sub-bg {
+      background:
+        radial-gradient(60% 40% at 80% -5%, rgba(139, 61, 255, .14), transparent 70%),
+        radial-gradient(50% 40% at 10% 0%, rgba(11, 141, 255, .10), transparent 70%);
+    }
+    .subwrap { position: relative; z-index: 1; max-width: 780px; margin: 0 auto; padding: 22px 16px 40px; }
+    .sub-hero { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+    .sub-hero img { width: 58px; height: 58px; border-radius: 16px; box-shadow: 0 0 26px rgba(139, 61, 255, .45); }
+    .sub-hero h1 { margin: 0; font-size: 1.3rem; font-weight: 800; line-height: 1.3; }
+    .sub-hero .sub-kicker { color: var(--text-3); font-size: .8rem; margin-top: 3px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg);
+      padding: 16px; margin-bottom: 14px; box-shadow: var(--shadow);
+    }
+    .card-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+    .card-t { font-weight: 700; font-size: .98rem; }
+    .card-s { color: var(--text-3); font-size: .76rem; margin-top: 2px; }
+    .sub-usage { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+    .ring {
+      --p: 0; width: 132px; height: 132px; border-radius: 50%; flex: 0 0 auto;
+      background: conic-gradient(var(--purple) calc(var(--p) * 1%), rgba(139, 61, 255, .13) 0);
+      display: flex; align-items: center; justify-content: center; margin: 0 auto;
+    }
+    .ring .inner {
+      width: 104px; height: 104px; border-radius: 50%; background: var(--card);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+    }
+    .ring .pct { font-size: 1.35rem; font-weight: 800; }
+    .ring .lbl { font-size: .7rem; color: var(--text-3); }
+    .sub-nums { flex: 1 1 240px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .num-box { background: var(--card-2); border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 10px 12px; }
+    .num-box .k { font-size: .72rem; color: var(--text-3); }
+    .num-box .v { font-size: 1.02rem; font-weight: 700; margin-top: 2px; }
+    .bar { height: 7px; border-radius: 99px; background: rgba(139, 61, 255, .16); overflow: hidden; margin-top: 12px; }
+    .bar > i { display: block; height: 100%; background: var(--grad); border-radius: 99px; }
+    .sub-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px; padding: 9px 13px; font-size: .84rem;
+      border-radius: 12px; border: 1px solid var(--border-strong); background: var(--card-2);
+      color: var(--text); cursor: pointer; text-decoration: none; font-family: var(--font);
+    }
+    .btn.primary { background: var(--grad); border-color: transparent; color: #fff; font-weight: 600; }
+    .btn.ghost { background: transparent; }
+    .btn:hover { filter: brightness(1.12); }
+    .sub-qr { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+    .sub-qr img { width: 168px; height: 168px; border-radius: 12px; background: #fff; padding: 6px; }
+    .sub-qr .hint { flex: 1 1 220px; color: var(--text-2); font-size: .82rem; line-height: 1.85; }
+    .cfg { border: 1px solid var(--border-soft); background: var(--card-2); border-radius: var(--radius); padding: 12px 13px; margin-bottom: 10px; }
+    .cfg-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .cfg-name { font-weight: 700; font-size: .92rem; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+    .chip {
+      font-size: .68rem; padding: 3px 8px; border-radius: 99px; border: 1px solid var(--border-strong);
+      color: var(--text-2); background: var(--panel-2); white-space: nowrap;
+    }
+    .chip.p { color: var(--purple-soft); border-color: rgba(139, 61, 255, .45); }
+    .chip.g { color: var(--green); border-color: rgba(22, 216, 120, .38); }
+    .chip.r { color: var(--red); border-color: rgba(255, 63, 79, .38); }
+    .cfg-link {
+      margin-top: 8px; font-size: .72rem; color: var(--text-3); direction: ltr; text-align: left;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .cfg-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+    details.qrbox { margin-top: 8px; }
+    details.qrbox summary { cursor: pointer; font-size: .78rem; color: var(--text-3); }
+    details.qrbox img { width: 150px; height: 150px; margin-top: 8px; background: #fff; border-radius: 10px; padding: 6px; }
+    .note { border-right: 3px solid var(--warn); background: rgba(231, 170, 44, .07); padding: 11px 13px; border-radius: 10px; font-size: .8rem; color: var(--text-2); line-height: 1.9; }
+    .apps { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 9px; margin-top: 4px; }
+    .app { background: var(--card-2); border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 10px 12px; }
+    .app b { display: block; font-size: .84rem; }
+    .app span { font-size: .73rem; color: var(--text-3); line-height: 1.7; display: block; margin-top: 3px; }
+    .sub-foot { text-align: center; color: var(--text-3); font-size: .72rem; margin-top: 18px; line-height: 1.9; }
+    .toast {
+      position: fixed; inset-inline: 0; bottom: 22px; margin: 0 auto; width: max-content; max-width: 90%;
+      background: var(--panel-2); border: 1px solid var(--border-strong); color: var(--text);
+      padding: 10px 16px; border-radius: 99px; font-size: .82rem; opacity: 0; transform: translateY(10px);
+      transition: .25s var(--ease); pointer-events: none; z-index: 5;
+    }
+    .toast.on { opacity: 1; transform: none; }
+    @media (max-width: 520px) { .sub-nums { grid-template-columns: 1fr 1fr; } .sub-hero h1 { font-size: 1.12rem; } }
+  </style>
+  <script>
+    /* honour the OS theme instead of forcing dark on a light phone */
+    if (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches) {
+      document.documentElement.dataset.theme = 'light';
+    }
+  </script>
+</head>
+<body>
+<div class="sub-bg"></div>
+<main class="subwrap">
+
+  <header class="sub-hero">
+    <img src="/static/img/emblem.svg" alt="">
+    <div style="flex:1 1 auto;min-width:0">
+      <h1>{{ model.title }}</h1>
+      <div class="sub-kicker">
+        {% if model.kind == 'group' %}اشتراک گروهی · {{ model.member_count }} کانفیگ{% else %}اشتراک شخصی{% endif %}
+        · {{ panel }}
+      </div>
+    </div>
+    <span class="chip {% if model.enabled %}g{% else %}r{% endif %}" id="state">
+      {% if model.enabled %}فعال{% else %}غیرفعال{% endif %}
+    </span>
+  </header>
+
+  {% if model.remark %}
+    <p style="color:var(--text-2);font-size:.84rem;margin:0 0 14px;line-height:1.9">{{ model.remark }}</p>
+  {% endif %}
+
+  <section class="card">
+    <div class="card-h">
+      <div>
+        <div class="card-t">وضعیت سرویس</div>
+        <div class="card-s">لینک اشتراک هر ساعت خودکار تازه می‌شود؛ این صفحه هم زنده است.</div>
+      </div>
+      <span class="card-s" id="seen">—</span>
+    </div>
+
+    <div class="sub-usage">
+      <div class="ring" id="ring" style="--p: {{ model.pct }}">
+        <div class="inner">
+          <div class="pct" id="pct">{% if model.total %}{{ model.pct }}٪{% else %}{{ model.used_text }}{% endif %}</div>
+          <div class="lbl">مصرف‌شده</div>
+        </div>
+      </div>
+      <div class="sub-nums">
+        <div class="num-box"><div class="k">حجم مصرف‌شده</div><div class="v" id="used">{{ model.used_text }}</div></div>
+        <div class="num-box"><div class="k">حجم باقی‌مانده</div><div class="v" id="left">{{ model.left_text }}</div></div>
+        <div class="num-box"><div class="k">سقف حجم</div><div class="v" id="total">{{ model.total_text }}</div></div>
+        <div class="num-box">
+          <div class="k">تاریخ انقضا</div>
+          <div class="v" id="expiry" data-ts="{{ model.expire_at }}">
+            {% if model.expire_at %}{{ model.expire_date }}{% else %}بدون انقضا{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="bar"><i style="width: {{ model.pct }}%"></i></div>
+    <div class="sub-actions">
+      <button class="btn primary" data-copy="url">کپی لینک اشتراک</button>
+      <a class="btn" href="{{ model.b64_path }}" download="titan-subscription.txt">دانلود فایل کانفیگ</a>
+      {% if model.has_qr %}<a class="btn ghost" href="{{ model.qr }}" download="titan-subscription-qr.png">ذخیرهٔ تصویر QR</a>{% endif %}
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-h"><div class="card-t">افزودن سریع به اپ</div></div>
+    <div class="sub-qr">
+      {% if model.has_qr %}
+        <img src="{{ model.qr }}" alt="QR لینک اشتراک">
+      {% else %}
+        <div class="note" style="flex:1 1 100%">{{ model.no_qr_reason or 'QR در این نصب پنل ساخته نمی‌شود؛ لینک را کپی کن.' }}</div>
+      {% endif %}
+      <div class="hint">
+        در اپ مورد نظر گزینهٔ <b>«افزودن از طریق QR / Scan»</b> را بزن و این کد را اسکن کن.
+        اگر از گوشی استفاده می‌کنی، به‌جای اسکن «کپی لینک اشتراک» را بزن و
+        <b>«Add subscription / لینک اشتراک»</b> را انتخاب کن.
+        <div style="margin-top:8px;color:var(--text-3)">
+          لینک: <span dir="ltr" style="color:var(--purple-soft)">{{ model.sub_url }}</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-h">
+      <div>
+        <div class="card-t">کانفیگ‌ها <span class="card-s">({{ model.configs|length }})</span></div>
+        <div class="card-s">همان چیزی که اپ با بازکردن لینک می‌گیرد؛ این‌ها را می‌توانی دستی هم اضافه کنی.</div>
+      </div>
+    </div>
+    {% if not model.configs %}
+      <div class="note">فعلاً کانفیگی برای این لینک ساخته نشده — با مسئول سرویس تماس بگیر.</div>
+    {% endif %}
+    {% for c in model.configs %}
+      <div class="cfg">
+        <div class="cfg-top">
+          <span class="cfg-name">{{ c.label }}</span>
+          <span class="chip p">{{ c.protocol_label }}</span>
+          {% if c.transport %}<span class="chip">{{ c.transport }}</span>{% endif %}
+          <span class="chip {% if c.security != 'none' %}g{% endif %}">{{ c.security }}</span>
+        </div>
+        <div class="cfg-link" title="{{ c.link }}">{{ c.endpoint }}{% if c.path %}{{ c.path }}{% endif %}</div>
+        <div class="cfg-acts">
+          <button class="btn" data-copy-link="{{ c.idx }}">کپی کانفیگ</button>
+          {% if c.qr %}<details class="qrbox"><summary>QR همین کانفیگ</summary><img src="{{ c.qr }}" alt="QR"></details>{% endif %}
+          {% if c.openable %}<a class="btn ghost" href="{{ c.link }}">باز کردن در اپ</a>{% endif %}
+        </div>
+      </div>
+    {% endfor %}
+    {% if model.no_qr_reason %}<div class="note" style="margin-top:6px">{{ model.no_qr_reason }}</div>{% endif %}
+  </section>
+
+  <section class="card">
+    <div class="card-h"><div class="card-t">راهنمای اتصال</div></div>
+    <div class="apps">
+      <div class="app"><b>Android</b><span>v2rayNG · MahsaNG · Hiddify — «افزودن subscription» و چسباندن لینک.</span></div>
+      <div class="app"><b>iPhone / Mac</b><span>Streisand · Happ · Hiddify — «Subscription / Add» و چسباندن لینک.</span></div>
+      <div class="app"><b>Windows</b><span>Hiddify · v2rayN — «Add subscription» → لینک را بچسبان.</span></div>
+      <div class="app"><b>sing-box / کلی</b><span>فایل <span dir="ltr">.json</span> را با «دانلود فایل کانفیگ» بگیر و import کن.</span></div>
+    </div>
+    <div class="note" style="margin-top:12px">
+      بعد از اضافه‌کردن، هر ساعت (و با دکمهٔ Refresh در اپ) لیست کانفیگ‌ها تازه می‌شود؛
+      اگر مسئول سرویس کانفیگی را کم یا زیاد کند، نیازی به گرفتن لینک تازه نیست.
+    </div>
+  </section>
+
+  <div class="note">
+    این لینک مثل رمز عبور است: هر کس آدرسش را داشته باشد همان کانفیگ‌ها را می‌گیرد و
+    مصرف مشترک را می‌بیند. آن را در گروه عمومی یا چت نگذار. اگر جایی لو رفت، از پنل
+    «تغییر لینک» را بزن — لینک قبلی همان لحظه از کار می‌افتد.
+  </div>
+
+  <p class="sub-foot">
+    {{ panel }} · نسخهٔ {{ model.version }}
+    {% if model.updated %} · آخرین تغییر در پنل: {{ model.updated }}{% endif %}
+    <br>
+    این صفحه هیچ داده‌ای دربارهٔ بقیهٔ اعضای گروه نشان نمی‌دهد.
+  </p>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+  (function () {
+    const DATA = {
+      url: {{ model.sub_url | tojson }},
+      json: {{ model.json_path | tojson }},
+      links: {{ model.links | tojson }}
+    };
+    const $ = (s) => document.querySelector(s);
+    const toastEl = $('#toast');
+    let toastTimer = 0;
+    function toast(msg) {
+      if (!toastEl) return;
+      toastEl.textContent = msg;
+      toastEl.classList.add('on');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toastEl.classList.remove('on'), 1800);
+    }
+    async function copyText(text) {
+      try {
+        if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+      } catch (_) {}
+      try { /* http + older webviews still need execCommand */
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        const ok = document.execCommand && document.execCommand('copy');
+        ta.remove(); return !!ok;
+      } catch (_) { return false; }
+    }
+    document.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-copy],[data-copy-link]');
+      if (!b) return;
+      let text = '';
+      if (b.hasAttribute('data-copy')) text = DATA.url;
+      else text = DATA.links[Number(b.dataset.copyLink)] || '';
+      toast((await copyText(text)) ? 'کپی شد ✓' : 'کپی نشد — خودت لینک را انتخاب و کپی کن');
+    });
+
+    /* Jalali dates via Intl: no library, and Persian users get the calendar they read */
+    function fmtDate(ts) {
+      try { return new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium' }).format(new Date(ts * 1000)); }
+      catch (_) { return new Date(ts * 1000).toISOString().slice(0, 10); }
+    }
+    function fmtBytes(n) {
+      const u = [[1099511627776, 'TB'], [1073741824, 'GB'], [1048576, 'MB'], [1024, 'KB']];
+      for (const [step, name] of u) {
+        if (n >= step) return (n / step).toFixed(n / step >= 100 ? 0 : 2) + ' ' + name;
+      }
+      return Math.round(n) + ' B';
+    }
+    const exp = $('#expiry');
+    const expireTs = exp ? Number(exp.dataset.ts || 0) : 0;
+    function tickExpiry() {
+      if (!exp || !expireTs) return;
+      const ms = expireTs * 1000 - Date.now();
+      if (ms <= 0) { exp.textContent = 'منقضی شده'; return; }
+      const d = Math.floor(ms / 86400000), h = Math.floor((ms % 86400000) / 3600000);
+      exp.textContent = fmtDate(expireTs) + ` · ${d} روز و ${h} ساعت`;
+    }
+    tickExpiry();
+    setInterval(tickExpiry, 60000);
+
+    async function refresh() {
+      try {
+        const r = await fetch(DATA.json, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+        if (!r.ok) return;
+        const d = await r.json();
+        const used = Number(d.used_bytes || 0), total = Number(d.total_bytes || 0);
+        const pct = total > 0 ? Math.min(100, Math.round(used * 100 / total)) : 0;
+        if ($('#used')) $('#used').textContent = fmtBytes(used);
+        if ($('#left')) $('#left').textContent = total > used ? fmtBytes(total - used) : '۰';
+        if ($('#total')) $('#total').textContent = total > 0 ? fmtBytes(total) : '∞';
+        if ($('#pct')) $('#pct').textContent = total > 0 ? pct + '٪' : fmtBytes(used);
+        if ($('#ring')) $('#ring').style.setProperty('--p', pct);
+        const bar = document.querySelector('.bar > i');
+        if (bar) bar.style.width = pct + '%';
+        const state = $('#state');
+        if (state) {
+          state.textContent = d.enabled ? 'فعال' : 'غیرفعال';
+          state.className = 'chip ' + (d.enabled ? 'g' : 'r');
+        }
+        const seen = $('#seen');
+        if (seen) seen.textContent = 'به‌روز: ' + new Intl.DateTimeFormat('fa-IR', { timeStyle: 'short' }).format(new Date());
+      } catch (_) { /* offline phone: the server-rendered numbers stay, which is the point */ }
+    }
+    refresh();
+    setInterval(refresh, 60000);
+  })();
+</script>
+</body>
+</html>

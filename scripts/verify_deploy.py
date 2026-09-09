@@ -278,6 +278,40 @@ def main() -> int:
             check("[11e] an anonymous/empty group is refused", r.status_code == 400, r.text[:100])
             r = c.get("/sub/sgdoesnotexist")
             check("[11f] an unknown group key is a 404", r.status_code == 404, f"HTTP {r.status_code}")
+
+            # the browser view of the same link
+            page = c.get(f"/sub/{skey}/page")
+            html = page.text if page.status_code == 200 else ""
+            check("[11g] the link has a human page (RTL, QR card, copy button)",
+                  page.status_code == 200 and 'dir="rtl"' in html
+                  and "کپی لینک اشتراک" in html and "<!doctype html>" in html.lower(),
+                  f"HTTP {page.status_code}, {len(html)} bytes")
+            check("[11h] the page hides the roster and never points at /api/",
+                  "noindex" in html and "/api/" not in html and (uid or "zz") not in html,
+                  f"noindex={'noindex' in html} api_refs={html.count('/api/')}")
+            check("[11i] the page is not cacheable and not indexable",
+                  "no-store" in page.headers.get("cache-control", "")
+                  and "noindex" in page.headers.get("x-robots-tag", ""),
+                  str({k: v for k, v in page.headers.items()
+                       if k.lower() in ("cache-control", "x-robots-tag")})[:160])
+            as_client = c.get(f"/sub/{skey}", headers={"Accept": "*/*"})
+            check("[11j] a VPN client still gets base64 from the same URL",
+                  as_client.status_code == 200
+                  and as_client.headers.get("content-type", "").startswith("text/plain"),
+                  as_client.headers.get("content-type"))
+            as_browser = c.get(f"/sub/{skey}",
+                               headers={"Accept": "text/html,application/xhtml+xml"})
+            check("[11k] a browser gets the page from that same URL",
+                  as_browser.status_code == 200
+                  and as_browser.headers.get("content-type", "").startswith("text/html"),
+                  as_browser.headers.get("content-type"))
+            jh = c.get(f"/sub/{skey}/json")
+            check("[11m] /sub/<key>/json announces JSON (once said text/plain)",
+                  jh.headers.get("content-type", "").startswith("application/json"),
+                  jh.headers.get("content-type"))
+            gone = c.get("/sub/sgrotatedaway0000/page")
+            check("[11l] a dead key answers with a readable 404 page, not JSON",
+                  gone.status_code == 404 and "معتبر نیست" in gone.text, f"HTTP {gone.status_code}")
         finally:
             if sub_id:
                 c.delete(f"/api/subscriptions/{sub_id}", headers={"Origin": BASE})

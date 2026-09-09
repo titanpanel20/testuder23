@@ -299,7 +299,14 @@ def test_group_endpoints_crud_and_public_link(admin, two_users):
 
         info = anon.get(f"{url}/json").json()
         assert info["kind"] == "group" and len(info["links"]) == 2, info
-        assert {m["name"] for m in info["members"]} == {"grp-a", "grp-b"}
+        # The public JSON is read by every member of the group, so it carries
+        # aggregates only: no roster, and above all no uids - a uid doubles as
+        # that member's own /sub/<uid> key.
+        assert "members" not in info and info["member_count"] == 2, info
+        assert info["expire_at"] == 0 and info["days_left"] is None, info
+        raw = anon.get(f"{url}/json").text
+        for u in two_users:
+            assert u["uid"] not in raw, f"member key leaked: {u['uid']}"
         assert anon.get(f"{url}/base64").status_code == 200
 
     admin.delete(f"/api/subscriptions/{sub['id']}")
@@ -335,8 +342,11 @@ def test_disabled_member_and_disabled_group(admin, two_users):
                      headers={"Origin": "http://testserver"}).json()["subscription"]
     try:
         db.update_user(two_users[1]["uid"], {"enabled": 0})
-        names = {m["name"] for m in admin.get(f"/sub/{sub['skey']}/json").json()["members"]}
-        assert names == {"grp-a"}                                # disabled member skipped
+        row = next(x for x in admin.get("/api/subscriptions").json()["subscriptions"]
+                   if x["id"] == sub["id"])
+        assert {m["name"] for m in row["members"]} == {"grp-a", "grp-b"}   # admin sees both
+        pub = admin.get(f"/sub/{sub['skey']}/json").json()
+        assert pub["member_count"] == 1 and "members" not in pub           # the link drops one
 
         db.update_subscription(sub["id"], {"enabled": 0})
         assert admin.get(f"/sub/{sub['skey']}").status_code == 404
@@ -420,6 +430,9 @@ def test_a_persian_group_name_still_serves_a_link(admin, make_user):
             body = base64.b64decode(r.text.strip() + "=" * (-len(r.text.strip()) % 4)).decode()
             assert body.splitlines()                       # at least the config itself
             j = anon.get(f"/sub/{sub['skey']}/json").json()
-            assert j["members"][0]["name"] == "علی-مشتری"
+            assert j["name"] == "خانوادهٔ ما" and j["member_count"] == 1, j
+            page = anon.get(f"/sub/{sub['skey']}/page")
+            assert page.status_code == 200, page.status_code
+            assert "خانوادهٔ ما" in page.text
     finally:
         admin.delete(f"/api/subscriptions/{sub['id']}")

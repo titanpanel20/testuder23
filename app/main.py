@@ -44,6 +44,7 @@ from .colo_map import describe_colo
 from . import geo as geo_mod
 from .geo import detect as geo_detect, flag_from_code
 from .links import build_links, subscription_text
+from . import subpage
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
@@ -1843,9 +1844,22 @@ async def api_rotate_subscription(sub_id: int, request: Request, _: str = Depend
     return {"ok": True, "subscription": updated, "url": f"/sub/{updated['skey']}"}
 
 
+def _wants_html(request: Request) -> bool:
+    """True for a browser, false for a subscription client.
+
+    Clients send `Accept: */*` or nothing at all, so they keep getting base64 -
+    that is the one thing here that must never change, because it is the whole
+    payload every app parses.
+    """
+    accept = (request.headers.get("accept") or "").lower()
+    return "text/html" in accept or "application/xhtml+xml" in accept
+
+
 @app.get("/sub/{uid}")
 async def sub_plain(uid: str, request: Request):
     kind, target = _sub_target(uid)
+    if kind is not None and _wants_html(request):
+        return _sub_page_response(kind, target, request)
     if kind == "group":
         payload = _group_payload(target, request)
         combined = [c["link"] for c in payload["info"]] + payload["links"]
@@ -1873,10 +1887,19 @@ async def sub_json(uid: str, request: Request):
             "kind": "group",
             "uid": target["skey"],
             "enabled": bool(target.get("enabled", 1)),
-            "members": payload["members"],
+            # payload["members"] is deliberately NOT published here: this route
+            # is unauthenticated and shared by the whole group, so listing names
+            # would show every member who else is in it, and a uid doubles as that
+            # member's own working subscription key (/sub/<uid>). Aggregates only.
+            "member_count": len(payload["members"]),
+            "used_bytes": payload["used"],
+            "total_bytes": payload["total"],
+            "expire_at": payload["expire_at"],
+            "days_left": (max(0, int((payload["expire_at"] - time.time()) // 86400))
+                          if payload["expire_at"] else None),
             "links": payload["links"],
             "main_link": payload["links"][0] if payload["links"] else "",
-        }, headers=_group_headers(target, payload))
+        }, headers=_for_json(_group_headers(target, payload)))
     if kind != "user":
         raise HTTPException(404, "not-found")
     user = target
@@ -1889,11 +1912,14 @@ async def sub_json(uid: str, request: Request):
         "protocol": user["protocol"],
         "quota_gb": round((user.get("quota_bytes") or 0) / (1024 ** 3), 3),
         "used_gb": round(st["used"] / (1024 ** 3), 3),
+        "used_bytes": int(st["used"]),
+        "total_bytes": int(user.get("quota_bytes") or 0),
+        "expire_at": int(user.get("expire_at") or 0),
         "days_left": st["days_left"],
         "active_connections": st["active_connections"],
         "links": links["all"],
         "main_link": links["main"],
-    }, headers=_sub_headers(user))
+    }, headers=_for_json(_sub_headers(user)))
 
 
 @app.get("/sub/{uid}/base64")
@@ -1909,6 +1935,106 @@ async def sub_base64(uid: str, request: Request):
     links = _links_for(user, request)
     combined = [c["link"] for c in links["info"]] + links["all"]
     return PlainTextResponse(subscription_text(combined), headers=_sub_headers(user))
+
+
+def _sub_page_model(kind: str, target: dict, request: Request) -> dict:
+    """Everything templates/subscription.html shows, and only what it shows."""
+    if kind == "group":
+        payload = _group_payload(target, request)
+        members = _group_members(target)
+        model = {
+            "kind": "group",
+            "key": target["skey"],
+            "title": target["name"],
+            "remark": target.get("remark") or "",
+            "links": payload["links"],
+            "used": payload["used"],
+            "total": payload["total"],
+            "expire_at": payload["expire_at"],
+            # xray.py serves a member while `enabled` is set (expiry and quota
+            # flip that flag from the background checks). The badge is stricter:
+            # it follows _user_status, so an expired member who has not been
+            # auto-disabled yet still shows as not live instead of "فعال".
+            "enabled": bool(target.get("enabled", 1))
+                       and any(_user_status(u)["live_enabled"] for u in members),
+            "member_count": len(members),
+            "updated": subpage.stamp(target.get("updated_at") or 0),
+        }
+    else:
+        built = _links_for(target, request)
+        st = _user_status(target)
+        model = {
+            "kind": "user",
+            "key": target["uid"],
+            "title": target["name"],
+            "remark": "",
+            "links": built["all"],
+            "used": st["used"],
+            "total": st["quota_bytes"],
+            "expire_at": int(target.get("expire_at") or 0),
+            "enabled": st["live_enabled"],
+            "member_count": 1,
+            "updated": "",
+        }
+    model["sub_url"] = f"https://{_public_host(request)}/sub/{model['key']}"
+    model["json_path"] = f"/sub/{model['key']}/json"
+    model["b64_path"] = f"/sub/{model['key']}/base64"
+    model["version"] = APP_VERSION
+    return subpage.decorate(model)
+
+
+def _sub_page_response(kind: str, target: dict, request: Request) -> Response:
+    resp = templates.TemplateResponse(
+        request, "subscription.html",
+        {"model": _sub_page_model(kind, target, request), "panel": APP_NAME},
+    )
+    # the page carries live usage, so no cache anywhere, and no search index:
+    # the URL itself is the secret
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    resp.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+_SUB_404 = """<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex"><title>لینک پیدا نشد</title></head>
+<body style="font-family:Tahoma,sans-serif;background:#020812;color:#e7e9ee;
+display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0">
+<div style="text-align:center;padding:24px;max-width:420px">
+<div style="font-size:2rem">🔗</div>
+<h1 style="font-size:1.05rem;margin:10px 0">این لینک اشتراک دیگر معتبر نیست</h1>
+<p style="color:#a6aebc;font-size:.85rem;line-height:1.9;margin:0">
+یا لینک را درست وارد نکرده‌ای، یا مسئول سرویس لینک را عوض کرده است.
+لینک تازه را از پنل بگیر و در اپ «Refresh» را بزن.</p></div></body></html>"""
+
+
+def _sub_page_404(request: Request) -> Response:
+    resp = HTMLResponse(_SUB_404, status_code=404)
+    resp.headers["X-Robots-Tag"] = "noindex, nofollow"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
+
+
+@app.get("/sub/{key}/page", response_class=HTMLResponse)
+async def sub_page(key: str, request: Request):
+    """The human-facing view of a subscription link (user or group)."""
+    kind, target = _sub_target(key)
+    if kind is None:
+        return _sub_page_404(request)
+    return _sub_page_response(kind, target, request)
+
+
+def _for_json(headers: dict) -> dict:
+    """Drop the text/plain Content-Type when the same headers answer a JSON route.
+
+    `_sub_headers`/`_group_headers` describe the base64 body; passing them to a
+    JSONResponse verbatim made `/sub/<key>/json` announce itself as text/plain.
+    """
+    return {k: v for k, v in headers.items() if k.lower() != "content-type"}
 
 
 def _sub_headers(user: dict) -> dict:

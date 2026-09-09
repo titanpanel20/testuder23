@@ -1191,7 +1191,7 @@
       if (!groups.length) { box.innerHTML = `<div class="cell-sub">${I18N.t('groups_empty')}</div>`; return; }
       box.innerHTML = groups.map(g => {
         const link = `${location.origin}/sub/${g.skey}`;
-        return `<div class="row" style="gap:10px;flex-wrap:wrap;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
+        return `<div class="row" style="gap:10px;flex-wrap:wrap;align-items:center;padding:6px 0;border-bottom:1px solid var(--border-soft)">
           <div style="flex:1 1 180px">
             <div class="cell-title">${esc(g.name)} ${g.enabled ? '' : badge(I18N.t('inactive'), 'bad')}</div>
             <div class="cell-sub" dir="ltr">${esc(link)}</div>
@@ -1200,6 +1200,8 @@
           <div class="cell-sub" style="flex:0 0 auto">${g.members.length}${g.missing.length ? ` · ${I18N.t('group_missing')}: ${g.missing.length}` : ''}</div>
           <div class="row-actions">
             <button class="icon-btn" data-g="copy" data-key="${g.skey}" title="${I18N.t('copy_sub')}">${ICONS.copy}</button>
+            <a class="icon-btn" href="/sub/${g.skey}/page" target="_blank" rel="noopener"
+               style="text-decoration:none" title="${I18N.t('sub_page')}">${ICONS.globe}</a>
             <button class="icon-btn" data-g="edit" data-id="${g.id}" title="${I18N.t('edit')}">${ICONS.pen || ICONS.eye}</button>
             <button class="icon-btn" data-g="rotate" data-id="${g.id}" title="${I18N.t('group_rotate')}">${ICONS.refresh}</button>
             <button class="icon-btn" data-g="del" data-id="${g.id}" title="${I18N.t('delete')}">${ICONS.trash || ICONS.close}</button>
@@ -1243,7 +1245,7 @@
           <label class="field"><span class="field-label" data-i18n="group_remark"></span>
             <input class="input" id="gRemark" value="${esc(g?.remark || '')}"></label>
           <div class="field"><span class="field-label" data-i18n="group_members"></span>
-            <div id="gUsers" style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px">
+            <div id="gUsers" style="max-height:220px;overflow:auto;border:1px solid var(--border-soft);border-radius:10px;padding:8px">
               ${users.length ? users.map(u => `
                 <label class="row" style="gap:8px;padding:3px 0">
                   <input type="checkbox" data-uid="${u.uid}" ${uids.has(u.uid) ? 'checked' : ''}>
@@ -1295,6 +1297,7 @@
               <button class="icon-btn" data-act="copy" data-uid="${u.uid}" title="${I18N.t('copy_sub')}">${ICONS.copy}</button>
               <button class="icon-btn" data-act="qr" data-uid="${u.uid}" title="${I18N.t('qr')}">${ICONS.qr}</button>
               <button class="icon-btn" data-act="view" data-uid="${u.uid}" title="${I18N.t('view')}">${ICONS.eye}</button>
+              <button class="icon-btn" data-act="page" data-uid="${u.uid}" title="${I18N.t('sub_page')}">${ICONS.globe}</button>
               <button class="icon-btn" data-act="revoke" data-uid="${u.uid}" title="${I18N.t('revoke')}">${ICONS.refresh}</button>
             </div>
           </td>
@@ -1311,6 +1314,7 @@
         const d = await U.apiJson(`/api/users/${uid}/links`);
         U.copyText(d.sub_url);
       } else if (act === 'view') await openLinksModal(uid);
+      else if (act === 'page') window.open(`/sub/${uid}/page`, '_blank', 'noopener');
       else if (act === 'qr') {
         U.modal({ title: I18N.t('qr'), body: `<div style="text-align:center"><img src="/api/users/${uid}/qr" style="max-width:100%;border-radius:12px" alt="QR"></div>`, foot: `<button class="btn" data-close>${I18N.t('close')}</button>` });
       } else if (act === 'revoke') {
