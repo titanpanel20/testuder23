@@ -41,7 +41,8 @@ from . import reality
 from . import tasks as bg
 from . import wg
 from .colo_map import describe_colo
-from .geo import detect_location, flag_from_code
+from . import geo as geo_mod
+from .geo import detect as geo_detect, flag_from_code
 from .links import build_links, subscription_text
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1350,9 +1351,21 @@ async def api_create_node(request: Request, _: str = Depends(_require_auth)):
         raise HTTPException(400, "name-required")
     address = _normalize_node_address(payload.get("address") or "")
     cc = (payload.get("country_code") or "").strip()[:2].upper()
-    # NOTE: auto-detection is intentionally disabled here because it often resolves
-    # Railway domains to US (via ip-api.com). Admins should set country_code/flag manually
-    # or use the node edit form to override. This avoids the node being auto-set to USA.
+    # Geo is auto-detected from the address alone - the admin pastes a domain and
+    # the panel fills city/country/flag. The answer comes from the node itself when
+    # it can be reached (its own egress IP is ground truth) and from GeoIP providers
+    # otherwise, and geo.detect() attaches notes explaining any answer that cannot
+    # be trusted (platform domains resolve to the platform's anycast, CDNs to theirs).
+    geo_notes: list[str] = []
+    if address and not cc:
+        loc = await asyncio.to_thread(geo_detect, address)
+        if loc.get("country_code"):
+            cc = loc["country_code"]
+            payload.setdefault("city", loc.get("city", ""))
+            payload.setdefault("country", loc.get("country", ""))
+            geo_notes = loc.get("notes") or []
+        elif loc.get("error"):
+            geo_notes = [f"geo: {loc['error']}"]
     # Manual nodes also get a per-node token so sync works without a shared
     # TITAN_NODE_SECRET; the token is returned once (never re-serialized).
     token = secrets.token_hex(16)
@@ -1366,7 +1379,8 @@ async def api_create_node(request: Request, _: str = Depends(_require_auth)):
         "token": token,
     })
     db.add_event("info", "node-create", name, ip=_client_ip(request))
-    return {"ok": True, "node": _serialize_node(node, await _node_status(node)), "token": token}
+    return {"ok": True, "node": _serialize_node(node, await _node_status(node)),
+            "token": token, "geo_notes": geo_notes}
 
 
 @app.patch("/api/nodes/{node_id}")
@@ -1381,15 +1395,14 @@ async def api_update_node(node_id: int, request: Request, _: str = Depends(_requ
             fields[k] = payload[k]
     if "address" in fields:
         fields["address"] = _normalize_node_address(fields.get("address") or "")
-    # auto-detect country/flag if an address is given and none is known
-    if "address" in fields and fields.get("address") and not fields.get("country_code") \
-            and not fields.get("flag") and not node.get("country_code"):
-        # Only auto-detect if the user hasn't explicitly set a country code yet.
-        # This prevents overwriting a manual selection on re-edits.
-        loc = await asyncio.to_thread(detect_location, fields["address"])
-        if loc:
-            fields.setdefault("city", loc["city"])
-            fields.setdefault("country", loc["country"])
+    # An address change means "this is a different server": re-locate it, unless the
+    # admin explicitly typed a country code in the same request (that wins).
+    new_addr = (fields.get("address") or "").strip()
+    if new_addr and new_addr != (node.get("address") or "") and not fields.get("country_code"):
+        loc = await asyncio.to_thread(geo_detect, new_addr, force=True)
+        if loc.get("country_code"):
+            fields["city"] = fields.get("city") or loc["city"]
+            fields["country"] = fields.get("country") or loc["country"]
             fields["country_code"] = loc["country_code"]
             fields["flag"] = loc["flag"]
     if "country_code" in fields and not payload.get("flag"):
@@ -1397,6 +1410,70 @@ async def api_update_node(node_id: int, request: Request, _: str = Depends(_requ
     updated = db.update_node(node_id, fields)
     db.add_event("info", "node-update", str(node_id), ip=_client_ip(request))
     return {"ok": True, "node": _serialize_node(updated, await _node_status(updated))}
+
+
+@app.post("/api/nodes/detect")
+async def api_detect_node_geo(request: Request, _: str = Depends(_require_auth)):
+    """Where would this address be? Preview only - nothing is written.
+
+    Used by the node form (and by the admin over curl) so a pasted domain can be
+    checked before the node is saved. `node_id` additionally lets the panel ask
+    that node about itself, which is the only accurate answer for a domain behind
+    a platform or a CDN.
+    """
+    payload = await request.json()
+    address = _normalize_node_address(payload.get("address") or "")
+    if not address:
+        raise HTTPException(400, "address-required")
+    token = ""
+    node_id = payload.get("node_id")
+    if node_id:
+        node = db.get_node(int(node_id))
+        if node:
+            token = node.get("token") or ""
+    out = await asyncio.to_thread(geo_detect, address, token=token,
+                                 force=bool(payload.get("force")))
+    out.setdefault("host", geo_mod.clean_host(address))
+    return {"ok": not out.get("error"), "geo": out}
+
+
+@app.post("/api/nodes/{node_id}/geo")
+async def api_relocate_node(node_id: int, request: Request, _: str = Depends(_require_auth)):
+    """Re-run detection for a stored node and persist what it says."""
+    node = db.get_node(node_id)
+    if not node:
+        raise HTTPException(404, "not-found")
+    address = (node.get("address") or "").strip()
+    if not address:
+        raise HTTPException(400, "node-has-no-address")
+    loc = await asyncio.to_thread(geo_detect, address, token=node.get("token") or "", force=True)
+    if not loc.get("country_code"):
+        return {"ok": False, "node": _serialize_node(node, await _node_status(node)),
+                "geo": loc, "geo_notes": loc.get("notes") or [f"geo: {loc.get('error', 'failed')}"]}
+    db.update_node(node_id, {
+        "city": node.get("city") or loc.get("city", ""),
+        "country": node.get("country") or loc.get("country", ""),
+        "country_code": loc["country_code"],
+        "flag": loc["flag"],
+    })
+    updated = db.get_node(node_id)
+    db.add_event("info", "node-geo", f"{node['name']}: {loc['country_code']}", ip=_client_ip(request))
+    return {"ok": True, "node": _serialize_node(updated, await _node_status(updated)),
+            "geo": loc, "geo_notes": loc.get("notes") or []}
+
+
+@app.get("/api/geo-self")
+async def api_geo_self(request: Request):
+    """Node side: report where *this* server is, from its own egress IP.
+
+    The main panel prefers this over GeoIP-on-the-domain, because a platform or
+    CDN domain resolves to shared infrastructure. Requires the same credential a
+    sync push uses.
+    """
+    given = request.headers.get("x-node-token", "")
+    if not nodesync.secret_valid_for_node(given):
+        raise HTTPException(401, "bad-token")
+    return await asyncio.to_thread(geo_mod.detect_self)
 
 
 @app.delete("/api/nodes/{node_id}")
@@ -1578,11 +1655,11 @@ async def api_node_register(request: Request):
     host = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", "", url)
     host = host.split("/", 1)[0].rsplit("@", 1)[-1].split(":")[0].strip("[]")
     if host:
-        loc = await asyncio.to_thread(detect_location, host)
-        if loc:
+        loc = await asyncio.to_thread(geo_detect, host, force=True)
+        if loc.get("country_code"):
             fields["city"] = loc.get("city", "")[:64]
             fields["country"] = loc.get("country", "")[:64]
-            fields["country_code"] = loc.get("country_code", "")[:2]
+            fields["country_code"] = loc["country_code"][:2]
             fields["flag"] = loc.get("flag", "🏳️")
     db.update_node(node["id"], fields)
     _trigger_node_sync()
@@ -1606,11 +1683,178 @@ def _clean_public_url(raw: str) -> str:
 
 
 # ------------------------------------------------------------------ subscriptions
+
+
+# ------------------------------------------------------ subscription groups
+def _group_members(sub: dict) -> list[dict]:
+    """A group's usable members: existing, enabled, not expired."""
+    out = []
+    for uid in sub.get("member_uids") or []:
+        u = db.get_user(uid)
+        if not u or not u.get("enabled"):
+            continue
+        out.append(u)
+    return out
+
+
+def _group_payload(sub: dict, request: Request | None) -> dict:
+    """All links of every member of a group, in member order, deduplicated.
+
+    A group is exactly what the panel could not do before: several configs behind
+    one subscription URL, so the admin hands out one link and adds/removes users
+    later without touching the client.
+    """
+    seen: set[str] = set()
+    links: list[str] = []
+    info: list[dict] = []
+    used = total = 0
+    expiries: list[int] = []
+    for u in _group_members(sub):
+        built = _links_for(u, request)
+        for line in built["all"]:
+            if line and line not in seen:
+                seen.add(line)
+                links.append(line)
+        if sub.get("include_info", 1):
+            info.extend(built["info"])
+        st = _user_status(u)
+        used += int(st["used"])
+        total += int(u.get("quota_bytes") or 0)
+        if u.get("expire_at"):
+            expiries.append(int(u["expire_at"]))
+    return {
+        "links": links,
+        "info": info,
+        "members": [{"uid": u["uid"], "name": u["name"], "protocol": u.get("protocol"),
+                     "expire_at": u.get("expire_at") or 0,
+                     "used": int(_user_status(u)["used"])} for u in _group_members(sub)],
+        "used": used,
+        "total": total,
+        "expire_at": min(expiries) if expiries else 0,
+    }
+
+
+def _group_headers(sub: dict, payload: dict) -> dict:
+    info = (f"upload=0; download={payload['used']}; total={payload['total']}; "
+            f"expire={payload['expire_at']}")
+    return {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Subscription-Userinfo": info,
+        "subscription-userinfo": info,
+        "Profile-Update-Interval": "1",
+        "profile-update-interval": "1",
+        # base64 only: a header value must be latin-1, and group names are usually
+        # Persian - "Profile-Name: خانواده" used to raise UnicodeEncodeError and turn
+        # the public link into a 500.
+        "Profile-Title": "base64:" + base64.b64encode(sub["name"].encode("utf-8")).decode(),
+        "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "X-Powered-By": "TiTaN",
+    }
+
+
+def _sub_target(key: str):
+    """`/sub/<key>` serves a user uid or a group skey - users win on a clash."""
+    user = db.get_user(key)
+    if user:
+        return "user", user
+    sub = db.get_subscription_by_key(key)
+    if sub and sub.get("enabled", 1):
+        return "group", sub
+    return None, None
+
+
+@app.get("/api/subscriptions")
+async def api_list_subscriptions(_: str = Depends(_require_auth)):
+    out = []
+    for sub in db.list_subscriptions():
+        members = [db.get_user(uid) for uid in (sub.get("member_uids") or [])]
+        out.append({
+            **{k: sub[k] for k in ("id", "skey", "name", "remark", "enabled", "include_info",
+                                   "created_at", "updated_at")},
+            "member_uids": sub.get("member_uids") or [],
+            "members": [{"uid": m["uid"], "name": m["name"], "protocol": m.get("protocol"),
+                         "enabled": bool(m.get("enabled"))} for m in members if m],
+            "missing": [u for u, m in zip(sub.get("member_uids") or [], members, strict=False)
+                        if m is None],
+        })
+    return {"subscriptions": out, "count": len(out)}
+
+
+@app.post("/api/subscriptions")
+async def api_create_subscription(request: Request, _: str = Depends(_require_auth)):
+    payload = await request.json()
+    name = (payload.get("name") or "").strip()[:64]
+    if not name:
+        raise HTTPException(400, "name-required")
+    uids = [str(u) for u in (payload.get("member_uids") or []) if str(u).strip()]
+    unknown = [u for u in uids if not db.get_user(u)]
+    if unknown:
+        raise HTTPException(400, f"unknown-users: {','.join(unknown[:5])}")
+    sub = db.create_subscription({
+        "skey": db.new_subscription_key(),
+        "name": name,
+        "remark": (payload.get("remark") or "")[:200],
+        "member_uids": uids,
+        "include_info": payload.get("include_info", True),
+    })
+    db.add_event("info", "sub-create", f"{name} ({len(uids)} users)", ip=_client_ip(request))
+    return {"ok": True, "subscription": sub, "url": f"/sub/{sub['skey']}"}
+
+
+@app.patch("/api/subscriptions/{sub_id}")
+async def api_update_subscription(sub_id: int, request: Request, _: str = Depends(_require_auth)):
+    sub = db.get_subscription(sub_id)
+    if not sub:
+        raise HTTPException(404, "not-found")
+    payload = await request.json()
+    fields = {k: payload[k] for k in ("name", "remark", "member_uids", "enabled",
+                                      "include_info") if k in payload}
+    if "member_uids" in fields:
+        uids = [str(u) for u in (fields["member_uids"] or []) if str(u).strip()]
+        unknown = [u for u in uids if not db.get_user(u)]
+        if unknown:
+            raise HTTPException(400, f"unknown-users: {','.join(unknown[:5])}")
+        fields["member_uids"] = uids
+    if "name" in fields and not str(fields["name"]).strip():
+        raise HTTPException(400, "name-required")
+    updated = db.update_subscription(sub_id, fields)
+    db.add_event("info", "sub-update", str(sub_id), ip=_client_ip(request))
+    return {"ok": True, "subscription": updated}
+
+
+@app.delete("/api/subscriptions/{sub_id}")
+async def api_delete_subscription(sub_id: int, request: Request, _: str = Depends(_require_auth)):
+    if not db.get_subscription(sub_id):
+        raise HTTPException(404, "not-found")
+    db.delete_subscription(sub_id)
+    db.add_event("info", "sub-delete", str(sub_id), ip=_client_ip(request))
+    return {"ok": True}
+
+
+@app.post("/api/subscriptions/{sub_id}/rotate")
+async def api_rotate_subscription(sub_id: int, request: Request, _: str = Depends(_require_auth)):
+    """New public token for a group - old links die at once."""
+    if not db.get_subscription(sub_id):
+        raise HTTPException(404, "not-found")
+    updated = db.update_subscription(sub_id, {"skey": db.new_subscription_key()})
+    db.add_event("info", "sub-rotate", str(sub_id), ip=_client_ip(request))
+    return {"ok": True, "subscription": updated, "url": f"/sub/{updated['skey']}"}
+
+
 @app.get("/sub/{uid}")
 async def sub_plain(uid: str, request: Request):
-    user = db.get_user(uid)
-    if not user:
+    kind, target = _sub_target(uid)
+    if kind == "group":
+        payload = _group_payload(target, request)
+        combined = [c["link"] for c in payload["info"]] + payload["links"]
+        body = subscription_text(combined)
+        return Response(content=body, media_type="text/plain",
+                        headers=_group_headers(target, payload))
+    if kind != "user":
         raise HTTPException(404, "not-found")
+    user = target
     links = _links_for(user, request)
     combined = [c["link"] for c in links["info"]] + links["all"]
     body = subscription_text(combined)
@@ -1620,9 +1864,22 @@ async def sub_plain(uid: str, request: Request):
 
 @app.get("/sub/{uid}/json")
 async def sub_json(uid: str, request: Request):
-    user = db.get_user(uid)
-    if not user:
+    kind, target = _sub_target(uid)
+    if kind == "group":
+        payload = _group_payload(target, request)
+        return JSONResponse({
+            "name": target["name"],
+            "remark": target.get("remark") or "",
+            "kind": "group",
+            "uid": target["skey"],
+            "enabled": bool(target.get("enabled", 1)),
+            "members": payload["members"],
+            "links": payload["links"],
+            "main_link": payload["links"][0] if payload["links"] else "",
+        }, headers=_group_headers(target, payload))
+    if kind != "user":
         raise HTTPException(404, "not-found")
+    user = target
     links = _links_for(user, request)
     st = _user_status(user)
     return JSONResponse({
@@ -1641,9 +1898,14 @@ async def sub_json(uid: str, request: Request):
 
 @app.get("/sub/{uid}/base64")
 async def sub_base64(uid: str, request: Request):
-    user = db.get_user(uid)
-    if not user:
+    kind, target = _sub_target(uid)
+    if kind == "group":
+        payload = _group_payload(target, request)
+        combined = [c["link"] for c in payload["info"]] + payload["links"]
+        return PlainTextResponse(subscription_text(combined), headers=_group_headers(target, payload))
+    if kind != "user":
         raise HTTPException(404, "not-found")
+    user = target
     links = _links_for(user, request)
     combined = [c["link"] for c in links["info"]] + links["all"]
     return PlainTextResponse(subscription_text(combined), headers=_sub_headers(user))

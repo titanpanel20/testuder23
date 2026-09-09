@@ -1092,6 +1092,10 @@
             <label class="field"><span class="field-label" data-i18n="country_code"></span><input class="input" name="country_code" id="nodeCc" value="${esc(cc)}" maxlength="2" style="text-transform:uppercase"></label>
             <label class="field"><span class="field-label" data-i18n="flag_placeholder"></span><input class="input" name="flag" id="${flagInputId}" value="${esc(node?.flag || flagFor(cc))}"></label>
           </div>
+          <div class="row" style="gap:10px;align-items:flex-start;margin-top:8px">
+            <button class="btn sm" type="button" id="geoBtn">${ICONS.refresh}<span data-i18n="geo_detect"></span></button>
+            <div id="geoNote" class="cell-sub" style="flex:1 1 200px">${I18N.t('geo_hint')}</div>
+          </div>
         </form>`,
       foot: `<button class="btn" data-close>${I18N.t('cancel')}</button>
              <button class="btn primary" id="saveNodeBtn">${I18N.t('save')}</button>`,
@@ -1099,6 +1103,36 @@
     I18N.apply();
     m.query('#nodeCc').addEventListener('input', () => {
       m.query('#' + flagInputId).value = flagFor(m.query('#nodeCc').value);
+    });
+    // --- where is this address? the panel asks the node first, then GeoIP
+    const runGeo = async (force) => {
+      const address = (m.query('[name=address]').value || '').trim();
+      if (!address) { U.toast(I18N.t('geo_need_address'), 'err'); return; }
+      const btn = m.query('#geoBtn'), note = m.query('#geoNote');
+      btn.disabled = true;
+      note.innerHTML = `<span class="cell-sub">${I18N.t('geo_running')}</span>`;
+      try {
+        const d = await U.apiJson('/api/nodes/detect', {
+          method: 'POST', body: JSON.stringify({ address, force: !!force, node_id: node?.id || 0 }),
+        });
+        const g = d.geo || {};
+        if (!g.country_code) {
+          note.innerHTML = `<span style="color:var(--red)">${esc(I18N.t('geo_failed'))}${g.error ? ' · ' + esc(g.error) : ''}</span>`;
+          return;
+        }
+        m.query('[name=city]').value = g.city || '';
+        m.query('[name=country]').value = g.country || '';
+        m.query('[name=country_code]').value = g.country_code;
+        m.query('#' + flagInputId).value = g.flag || flagFor(g.country_code);
+        note.innerHTML = `<span dir="ltr">${esc(g.ip || '')}</span> · <span class="cell-sub">${esc(g.source || '')}</span>`
+          + (g.notes || []).map(n => `<div style="color:var(--amber);margin-top:4px">${esc(n)}</div>`).join('');
+      } catch (e) {
+        note.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`;
+      } finally { btn.disabled = false; }
+    };
+    m.query('#geoBtn').addEventListener('click', () => runGeo(true));
+    m.query('[name=address]').addEventListener('change', () => {
+      if (!(m.query('#nodeCc').value || '').trim()) runGeo(false);
     });
     m.query('#saveNodeBtn').addEventListener('click', async () => {
       const fd = new FormData(m.query('#nodeForm'));
@@ -1128,6 +1162,14 @@
       <div class="page-head">
         <div><h1 class="page-title" data-i18n="subs_title"></h1><p class="page-sub" data-i18n="subs_sub"></p></div>
       </div>
+      <div class="panel" style="margin-bottom:14px">
+        <div class="panel-head"><div class="panel-title" data-i18n="groups_title"></div>
+          <div class="page-actions"><button class="btn sm primary" id="addGroupBtn">+ <span data-i18n="group_add"></span></button></div></div>
+        <div class="panel-body">
+          <div class="cell-sub" style="margin-bottom:10px" data-i18n="groups_hint"></div>
+          <div id="groupRows"></div>
+        </div>
+      </div>
       <div class="table-wrap">
         <table class="data">
           <thead><tr>
@@ -1138,6 +1180,104 @@
         </table>
       </div>`;
     let users = [];
+
+    // --- groups: one link, several configs
+    async function loadGroups() {
+      const box = $('#groupRows');
+      let groups = [];
+      try { groups = (await U.apiJson('/api/subscriptions')).subscriptions || []; }
+      catch (e) { if (box) box.innerHTML = `<div class="cell-sub">${esc(e.message)}</div>`; return; }
+      if (!box) return;
+      if (!groups.length) { box.innerHTML = `<div class="cell-sub">${I18N.t('groups_empty')}</div>`; return; }
+      box.innerHTML = groups.map(g => {
+        const link = `${location.origin}/sub/${g.skey}`;
+        return `<div class="row" style="gap:10px;flex-wrap:wrap;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
+          <div style="flex:1 1 180px">
+            <div class="cell-title">${esc(g.name)} ${g.enabled ? '' : badge(I18N.t('inactive'), 'bad')}</div>
+            <div class="cell-sub" dir="ltr">${esc(link)}</div>
+            ${g.remark ? `<div class="cell-sub">${esc(g.remark)}</div>` : ''}
+          </div>
+          <div class="cell-sub" style="flex:0 0 auto">${g.members.length}${g.missing.length ? ` · ${I18N.t('group_missing')}: ${g.missing.length}` : ''}</div>
+          <div class="row-actions">
+            <button class="icon-btn" data-g="copy" data-key="${g.skey}" title="${I18N.t('copy_sub')}">${ICONS.copy}</button>
+            <button class="icon-btn" data-g="edit" data-id="${g.id}" title="${I18N.t('edit')}">${ICONS.pen || ICONS.eye}</button>
+            <button class="icon-btn" data-g="rotate" data-id="${g.id}" title="${I18N.t('group_rotate')}">${ICONS.refresh}</button>
+            <button class="icon-btn" data-g="del" data-id="${g.id}" title="${I18N.t('delete')}">${ICONS.trash || ICONS.close}</button>
+          </div>
+        </div>`;
+      }).join('');
+      I18N.apply();
+    }
+    $('#groupRows').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-g]');
+      if (!btn) return;
+      const act = btn.dataset.g;
+      if (act === 'copy') { U.copyText(`${location.origin}/sub/${btn.dataset.key}`); return; }
+      if (act === 'rotate') {
+        if (!await U.confirmDlg(I18N.t('group_rotate'), I18N.t('group_rotate_confirm'))) return;
+        try { await U.apiJson(`/api/subscriptions/${btn.dataset.id}/rotate`, { method: 'POST' }); U.toast(I18N.t('group_rotated'), 'ok'); await loadGroups(); }
+        catch (err) { U.toast(err.message, 'err'); }
+        return;
+      }
+      if (act === 'del') {
+        if (!await U.confirmDlg(I18N.t('delete'), I18N.t('group_delete_confirm'))) return;
+        try { await U.apiJson(`/api/subscriptions/${btn.dataset.id}`, { method: 'DELETE' }); await loadGroups(); }
+        catch (err) { U.toast(err.message, 'err'); }
+        return;
+      }
+      if (act === 'edit') {
+        const all = (await U.apiJson('/api/subscriptions')).subscriptions || [];
+        openGroupForm(all.find(x => String(x.id) === btn.dataset.id));
+      }
+    });
+    $('#addGroupBtn').addEventListener('click', () => openGroupForm(null));
+    loadGroups();
+
+    function openGroupForm(g) {
+      const uids = new Set((g?.member_uids) || []);
+      U.modal({
+        title: g ? I18N.t('group_edit') : I18N.t('group_add'),
+        body: `
+          <label class="field"><span class="field-label" data-i18n="name"></span>
+            <input class="input" id="gName" value="${esc(g?.name || '')}"></label>
+          <label class="field"><span class="field-label" data-i18n="group_remark"></span>
+            <input class="input" id="gRemark" value="${esc(g?.remark || '')}"></label>
+          <div class="field"><span class="field-label" data-i18n="group_members"></span>
+            <div id="gUsers" style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px">
+              ${users.length ? users.map(u => `
+                <label class="row" style="gap:8px;padding:3px 0">
+                  <input type="checkbox" data-uid="${u.uid}" ${uids.has(u.uid) ? 'checked' : ''}>
+                  <span>${esc(u.name)}</span><span class="cell-sub">${esc(u.protocol || '')}</span>
+                </label>`).join('') : `<div class="cell-sub">${I18N.t('no_users')}</div>`}
+            </div>
+          </div>
+          <label class="row" style="gap:8px;margin-top:8px"><input type="checkbox" id="gInfo" ${g && !g.include_info ? '' : 'checked'}>
+            <span class="cell-sub" data-i18n="group_include_info"></span></label>
+          ${g ? `<div class="cell-sub" style="margin-top:8px" dir="ltr">${esc(`${location.origin}/sub/${g.skey}`)}</div>` : ''}`,
+        foot: `<button class="btn" data-close>${I18N.t('cancel')}</button>
+               <button class="btn primary" id="gSave">${I18N.t('save')}</button>`,
+      });
+      I18N.apply();
+      const overlay = document.querySelector('.modal-overlay');
+      overlay.querySelector('#gSave').addEventListener('click', async () => {
+        const picked = Array.from(overlay.querySelectorAll('#gUsers input[type=checkbox]'))
+          .filter(c => c.checked).map(c => c.dataset.uid);
+        const body = {
+          name: overlay.querySelector('#gName').value.trim(),
+          remark: overlay.querySelector('#gRemark').value.trim(),
+          member_uids: picked,
+          include_info: !!overlay.querySelector('#gInfo').checked,
+        };
+        try {
+          if (g) await U.apiJson(`/api/subscriptions/${g.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+          else await U.apiJson('/api/subscriptions', { method: 'POST', body: JSON.stringify(body) });
+          U.closeModal();
+          U.toast(I18N.t('group_saved'), 'ok');
+          await loadGroups();
+        } catch (err) { U.toast(err.message, 'err'); }
+      });
+    }
+
     async function load() {
       try { users = (await U.apiJson('/api/users')).users || []; }
       catch (e) { $('#subRows').innerHTML = `<tr><td colspan="6">${U.empty('⚠️', I18N.t('error'), e.message)}</td></tr>`; return; }
@@ -1161,6 +1301,7 @@
         </tr>`;
       }).join('') : `<tr><td colspan="6">${U.empty('🔗', I18N.t('no_subs'), '')}</td></tr>`;
       I18N.apply();
+      loadGroups();
     }
     $('#subRows').addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-act]');

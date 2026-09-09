@@ -225,7 +225,66 @@ def main() -> int:
     check("[8] xray config generation runs clean", "OK inbounds=" in out.stdout,
           (out.stdout + out.stderr)[-240:])
 
-    # -------------------------------------------------------- 10. restore admin state
+    # -------------------------------------------------------- 10. node geo detection
+    with session(good_pw) as c:
+        r = c.post("/api/nodes/detect", json={"address": "one.one.one.one", "force": True},
+                   headers={"Origin": BASE})
+        ok = r.status_code == 200 and (
+            (r.json().get("geo") or {}).get("country_code")
+            or (r.json().get("geo") or {}).get("error"))
+        check("[10] /api/nodes/detect answers (country or a stated reason)", ok,
+              f"HTTP {r.status_code} {r.text[:150]}")
+        if ok and r.status_code == 200:
+            g = r.json().get("geo") or {}
+            print(f"        geo: {g.get('city', '?')}, {g.get('country', '?')} "
+                  f"({g.get('country_code', '-')}) ip={g.get('ip', '-')} src={g.get('source', '-')}")
+            for note in (g.get("notes") or [])[:3]:
+                print(f"        (note) {note}")
+        r = c.post("/api/nodes/detect", json={}, headers={"Origin": BASE})
+        check("[10b] an empty address is a 400, not a 500", r.status_code == 400, r.text[:100])
+        check("[10c] /api/geo-self is not open to strangers",
+              c.get("/api/geo-self").status_code == 401, f"HTTP {c.get('/api/geo-self').status_code}")
+
+    # -------------------------------------------------------- 11. subscription groups
+    with session(good_pw) as c:
+        created = c.post("/api/users", json={"name": f"verify-group-{int(time.time())}",
+                                             "protocol": "vless"}, headers={"Origin": BASE})
+        uid = (created.json().get("user") or {}).get("uid") if created.status_code == 200 else None
+        check("[11] a user exists to group", bool(uid), created.text[:120])
+        sub_id = None
+        try:
+            r = c.post("/api/subscriptions", json={"name": "verify", "member_uids": [uid]},
+                       headers={"Origin": BASE})
+            sub_id = (r.json().get("subscription") or {}).get("id") if r.status_code == 200 else None
+            skey = (r.json().get("subscription") or {}).get("skey", "")
+            check("[11b] a group can be created", r.status_code == 200 and bool(skey), r.text[:150])
+
+            import base64 as _b64
+
+            pub = c.get(f"/sub/{skey}")          # no auth: this is the client-facing link
+            lines = []
+            if pub.status_code == 200:
+                text = pub.text.strip()
+                lines = _b64.b64decode(text + "=" * (-len(text) % 4)).decode().splitlines()
+            check("[11c] the group link serves its configs without a login",
+                  pub.status_code == 200 and any(l.startswith(("vless://", "vmess://", "trojan://"))
+                                                 for l in lines),
+                  f"HTTP {pub.status_code}, {len(lines)} lines")
+            check("[11d] the group link carries client headers",
+                  "Subscription-Userinfo" in pub.headers and "Profile-Title" in pub.headers,
+                  str(dict(pub.headers))[:160])
+            r = c.post("/api/subscriptions", json={"name": "", "member_uids": []},
+                       headers={"Origin": BASE})
+            check("[11e] an anonymous/empty group is refused", r.status_code == 400, r.text[:100])
+            r = c.get("/sub/sgdoesnotexist")
+            check("[11f] an unknown group key is a 404", r.status_code == 404, f"HTTP {r.status_code}")
+        finally:
+            if sub_id:
+                c.delete(f"/api/subscriptions/{sub_id}", headers={"Origin": BASE})
+            if uid:
+                c.delete(f"/api/users/{uid}", headers={"Origin": BASE})
+
+    # -------------------------------------------------------- 12. restore admin state
     with session(good_pw) as c:
         r = c.post("/api/change-password", json={"old_password": good_pw, "new_password": ""},
                    headers={"Origin": BASE})

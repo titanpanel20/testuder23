@@ -85,6 +85,12 @@ const I18N = (() => {
       node_waiting: 'هنوز ثبت نشده — مطمئن شوید سرویس دیپلوی شده و دامنه دارد؛ کمی صبر کنید.',
       node_registered: 'نود با موفقیت وصل شد', node_gen_fail: 'ساخت توکن ناموفق بود',
       // subscriptions
+      geo_detect: 'تشخیص خودکار لوکیشن', geo_hint: 'با گذاشتن آدرس، کشور/شهر/پرچم خودکار پر می‌شود (اول از خود نود می‌پرسد، بعد GeoIP).', geo_running: 'در حال تشخیص…', geo_need_address: 'اول آدرس را بنویس', geo_failed: 'لوکیشن پیدا نشد — می‌توانی دستی وارد کنی',
+      groups_title: 'گروه‌های اشتراک', groups_hint: 'یک لینک، چند کانفیگ: هر کاربر را که انتخاب کنی در همین لینک قرار می‌گیرد و می‌تونی بعداً کم/زیادشان کنی.', groups_empty: 'هنوز گروهی نساخته‌ای — لینک هر کاربر فقط کانفیگ خودش را دارد.',
+      group_add: 'افزودن گروه', group_edit: 'ویرایش گروه', group_remark: 'توضیح (اختیاری)', group_members: 'کاربرها', group_missing: 'حذف‌شده', group_include_info: 'خط وضعیت مصرف هم در لینک باشد', group_rotate: 'تغییر لینک', group_rotate_confirm: 'لینک فعلی از کار می‌افتد و همهٔ کلاینت‌ها باید لینک تازه را بگیرند. ادامه می‌دهی؟', group_delete_confirm: 'گروه حذف شود؟ لینک عمومی‌اش از کار می‌افتد.', group_saved: 'گروه ذخیره شد', no_users: 'هنوز کاربری نداری',
+      geo_detect: 'Auto-detect location', geo_hint: 'Paste an address and the country/city/flag are filled in (the node is asked first, then GeoIP).', geo_running: 'detecting…', geo_need_address: 'write the address first', geo_failed: 'location not found — you can set it by hand',
+      groups_title: 'Subscription groups', groups_hint: 'One link, several configs: every user you tick is served from this link, and you can add or drop them later.', groups_empty: 'No groups yet — each user link carries only that user.',
+      group_add: 'Add group', group_edit: 'Edit group', group_remark: 'remark (optional)', group_members: 'Users', group_missing: 'removed', group_include_info: 'include the usage status line', group_rotate: 'Rotate link', group_rotate_confirm: 'The current link stops working and every client must fetch the new one. Continue?', group_delete_confirm: 'Delete the group? Its public link stops working.', group_saved: 'group saved', no_users: 'no users yet',
       subs_title: 'اشتراک‌ها', subs_sub: 'مدیریت اشتراک‌های کاربران',
       sub_link: 'لینک اشتراک', sub_status: 'وضعیت اشتراک', config_count: 'تعداد کانفیگ',
       copy_sub: 'کپی لینک اشتراک', view: 'مشاهده', revoke: 'ابطال',

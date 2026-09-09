@@ -93,6 +93,8 @@ Nginx (PORT) ──┬─ /vl-ws  ──► Xray VLESS WS  (10001)
 ```
 
 - **پنل (FastAPI)** مدیریت کاربران، لینک‌ها و آمار را انجام می‌دهد.
+- تشخیص خودکار لوکیشن نود از روی آدرس (اول از خود نود می‌پرسد، بعد GeoIP) با کشور/شهر/کد کشور/پرچم و یادداشت وقتی جواب قابل‌اتکام نیست
+- گروه اشتراک: چند کانفیگ در یک لینک `/sub/sg…` که بعداً کم/زیاد می‌شود، با dedupe و هدرهای وضعیت برای کلاینت‌ها
 - **Xray-core** موتور پروکسی واقعی است؛ پنل بعد از هر تغییر، `config.json` آن را بازتولید و Xray را ری‌استارت می‌کند.
 - آمار ترافیک هر ۵ ثانیه از API آمار Xray خوانده و در SQLite ذخیره می‌شود.
 
@@ -102,6 +104,7 @@ Nginx (PORT) ──┬─ /vl-ws  ──► Xray VLESS WS  (10001)
 |---|---|---|
 | `PORT` | `8000` | پورت عمومی (توسط Railway/Render تزریق می‌شود) |
 | `TITAN_DATA_DIR` | `data/` | محل دیتابیس و بکاپ |
+| `TITAN_IPINFO_TOKEN` | خالی | توکن ipinfo.io به‌عنوان GeoIP سوم وقتی ipwho.is و ip-api جواب ندهند (اختیاری)
 | `PANEL_PORT` | `10000` | پورت داخلی پنل |
 | `XRAY_BIN` | `/usr/local/bin/xray` | مسیر باینری Xray |
 
@@ -123,6 +126,9 @@ Nginx (PORT) ──┬─ /vl-ws  ──► Xray VLESS WS  (10001)
 | `/sub/<uid>` | GET | اشتراک (عمومی) |
 | `/api/status/<uid>` | GET | وضعیت عمومی |
 | `/api/stats` | GET | آمار سیستم |
+| `/api/subscriptions` | GET/POST | گروه‌های اشتراک (چند کانفیگ در یک لینک)؛ `PATCH`/`DELETE`/`POST /<id>/rotate` هم دارد |
+| `/api/nodes/detect` | POST | پیش‌نمایش تشخیص لوکیشن یک آدرس (بدون نوشتن) |
+| `/sub/<skey>` | GET | لینک عمومی یک گروه اشتراک (بدون لاگین) |
 | `/api/nodes` | GET/POST | لیست/افزودن سرور |
 | `/api/nodes/<id>` | PATCH/DELETE | ویرایش/حذف سرور |
 | `/api/nodes/<id>/ping` | POST | بررسی اتصال سرور |

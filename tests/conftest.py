@@ -28,6 +28,25 @@ sys.path.insert(0, str(REPO.parent))
 ENV_KEYS = ("TITAN_DATA_DIR", "TITAN_DB_PATH", "TITAN_XRAY_CONFIG")
 
 
+@pytest.fixture(autouse=True)
+def _offline_geo(monkeypatch):
+    """No test may touch DNS or a GeoIP provider.
+
+    Node create/update/locate call app.geo.detect, which would otherwise make the
+    suite depend on the network (and on a third-party API's rate limit). The stub
+    makes detection answer "unresolved" instantly; a test that wants a real answer
+    monkeypatches app.main.geo_detect or app.geo.http_json itself.
+    """
+    from app import geo
+
+    monkeypatch.setattr(geo, "resolve_ip", lambda host, timeout=2.5: "")
+
+    def _blocked(url, timeout=4.0, headers=None):
+        raise AssertionError(f"test tried to reach {url}")
+
+    monkeypatch.setattr(geo, "http_json", _blocked)
+
+
 def compile_all(root):
     return subprocess.run([sys.executable, "-m", "compileall", "-q", "app", "scripts"],
                           cwd=str(root), capture_output=True, text=True)

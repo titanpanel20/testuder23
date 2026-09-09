@@ -157,7 +157,7 @@ async def _maybe_backup():
 
 async def _enrich_node_locations():
     """Fill missing country/flag for nodes that have an address, every 6h."""
-    from .geo import detect_location
+    from . import geo as geo_mod
 
     await asyncio.sleep(15)
     while True:
@@ -167,8 +167,9 @@ async def _enrich_node_locations():
                     continue
                 if n.get("country_code") or not (n.get("address") or "").strip():
                     continue
-                loc = await asyncio.to_thread(detect_location, n["address"])
-                if loc:
+                loc = await asyncio.to_thread(
+                    geo_mod.detect, n["address"], token=n.get("token") or "")
+                if loc.get("country_code"):
                     db.update_node(n["id"], {
                         "city": n.get("city") or loc["city"],
                         "country": n.get("country") or loc["country"],

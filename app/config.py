@@ -64,6 +64,10 @@ XRAY_TCP_VMESS_TLS_PORT = int(os.environ.get("XRAY_TCP_VMESS_TLS_PORT", "10011")
 XRAY_TCP_TROJAN_PORT = int(os.environ.get("XRAY_TCP_TROJAN_PORT", "10012"))          # tls
 
 # Xray terminates TLS itself for the TCP-TLS inbounds; point these at a cert.
+#: optional: ipinfo.io personal-access-token, a third GeoIP provider for when
+#: ipwho.is and ip-api both fail (free tier is ~50k lookups/month).
+IPINFO_TOKEN = (os.environ.get("TITAN_IPINFO_TOKEN") or "").strip()
+
 TLS_CERT_FILE = os.environ.get("TITAN_TLS_CERT", "")
 TLS_KEY_FILE = os.environ.get("TITAN_TLS_KEY", "")
 

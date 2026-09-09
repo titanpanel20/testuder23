@@ -103,6 +103,20 @@ CREATE TABLE IF NOT EXISTS nodes (
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_users_uid ON users(uid);
+-- Subscription GROUPS: one public link that carries several users' configs.
+-- (3x-ui has no equivalent; this is the "add a subscription" the panel lacked -
+-- before it, one link could only ever mean one user.)
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    skey         TEXT NOT NULL UNIQUE,
+    name         TEXT NOT NULL,
+    remark       TEXT NOT NULL DEFAULT '',
+    member_uids  TEXT NOT NULL DEFAULT '[]',
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    include_info INTEGER NOT NULL DEFAULT 1,
+    created_at   REAL NOT NULL,
+    updated_at   REAL NOT NULL
+);
 """
 
 
@@ -520,6 +534,102 @@ def update_node(node_id: int, fields: dict) -> dict | None:
             c.execute(f"UPDATE nodes SET {', '.join(sets)} WHERE id=?", vals)
             c.commit()
     return get_node(node_id)
+
+
+# ------------------------------------------------------- subscription groups
+#: a group's public token: `sg` + 12 hex, so it can never collide with a 16-hex
+#: user uid (both are accepted by /sub/<key>).
+def new_subscription_key() -> str:
+    return "sg" + secrets.token_hex(6)
+
+
+def _decode_members(row: dict) -> dict:
+    raw = row.get("member_uids")
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw or "[]")
+        except ValueError:
+            data = []
+        row["member_uids"] = [str(u) for u in data if u]
+    elif raw is None:
+        row["member_uids"] = []
+    return row
+
+
+def create_subscription(data: dict) -> dict:
+    now = time.time()
+    with _lock:
+        c = _connect()
+        cur = c.execute(
+            "INSERT INTO subscriptions(skey, name, remark, member_uids, enabled, include_info, "
+            "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (
+                data["skey"],
+                (data.get("name") or "Subscription")[:64],
+                (data.get("remark") or "")[:200],
+                json.dumps(list(data.get("member_uids") or [])),
+                1 if data.get("enabled", True) else 0,
+                1 if data.get("include_info", True) else 0,
+                now, now,
+            ),
+        )
+        c.commit()
+        return get_subscription(cur.lastrowid)
+
+
+def get_subscription(sub_id: int) -> dict | None:
+    with _lock:
+        c = _connect()
+        row = c.execute("SELECT * FROM subscriptions WHERE id=?", (sub_id,)).fetchone()
+    return _decode_members(dict(row)) if row else None
+
+
+def get_subscription_by_key(skey: str) -> dict | None:
+    skey = (skey or "").strip()
+    if not skey:
+        return None
+    with _lock:
+        c = _connect()
+        row = c.execute("SELECT * FROM subscriptions WHERE skey=?", (skey,)).fetchone()
+    return _decode_members(dict(row)) if row else None
+
+
+def list_subscriptions() -> list[dict]:
+    with _lock:
+        c = _connect()
+        rows = c.execute("SELECT * FROM subscriptions ORDER BY id DESC").fetchall()
+    return [_decode_members(dict(r)) for r in rows]
+
+
+def update_subscription(sub_id: int, fields: dict) -> dict | None:
+    allowed = {"name", "remark", "member_uids", "enabled", "include_info", "skey"}
+    with _lock:
+        c = _connect()
+        sets, vals = [], []
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            if k == "member_uids":
+                v = json.dumps([str(u) for u in (v or [])])
+            elif k in ("enabled", "include_info"):
+                v = 1 if v else 0
+            sets.append(f"{k}=?")
+            vals.append(v)
+        if sets:
+            vals.append(time.time())
+            sets.append("updated_at=?")
+            vals.append(sub_id)
+            c.execute(f"UPDATE subscriptions SET {', '.join(sets)} WHERE id=?", vals)
+            c.commit()
+    return get_subscription(sub_id)
+
+
+def delete_subscription(sub_id: int) -> bool:
+    with _lock:
+        c = _connect()
+        cur = c.execute("DELETE FROM subscriptions WHERE id=?", (sub_id,))
+        c.commit()
+    return cur.rowcount > 0
 
 
 def delete_node(node_id: int) -> bool:
