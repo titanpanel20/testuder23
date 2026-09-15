@@ -44,7 +44,7 @@ from .colo_map import describe_colo
 from . import geo as geo_mod
 from .geo import detect as geo_detect, flag_from_code
 from .links import build_links, subscription_text
-from . import subpage
+from . import subfmt, subpage, tuning
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
@@ -331,10 +331,25 @@ def _user_endpoint(u: dict, request: Request | None) -> tuple[str, int]:
     return host, port
 
 
+def _profile_override(request: Request | None, settings: dict) -> dict:
+    """`?profile=mci|irancell|general` re-tunes what is generated for *this* request.
+
+    It never writes: a query param in a subscriber's URL must not be able to change
+    the server config every other user gets. Read it as "give me my configs as they
+    would look with that operator profile".
+    """
+    if request is None:
+        return settings
+    prof = (request.query_params.get("profile") or "").strip().lower()
+    if prof in tuning.PROFILES and prof != settings.get("operator_profile"):
+        return {**settings, "operator_profile": prof}
+    return settings
+
+
 def _links_for(u: dict, request: Request | None) -> dict:
     """Build a user's links (handles WireGuard server-pub resolution)."""
     u = _ensure_wg_user(u)
-    settings = db.get_settings()
+    settings = _profile_override(request, db.get_settings())
     host, port = _user_endpoint(u, request)
     # A panel-wide sni_override (e.g. a CDN domain) only makes sense for the
     # main panel's own TLS. A link that dials a remote node must present that
@@ -824,10 +839,29 @@ async def api_set_settings(request: Request, _: str = Depends(_require_auth)):
             continue
         if k == "default_alpn" and v not in config.VALID_ALPNS:
             continue
+        if k == "operator_profile" and str(v) not in tuning.PROFILES:
+            continue
+        if k == "xhttp_mode" and str(v) not in tuning.XHTTP_MODES:
+            continue
+        if k == "tcp_congestion" and str(v) not in tuning.TCP_CONGESTION:
+            continue
+        if k in ("xhttp_padding",) and str(v or "").strip() and not tuning.range_ok(v):
+            continue
+        if k in ("tcp_keepalive_idle", "tcp_user_timeout", "wg_keepalive", "wg_mtu"):
+            try:
+                v = int(v)
+            except (TypeError, ValueError):
+                continue
         updates[k] = v
     db.set_settings(updates)
-    # routing-affecting flags require an Xray reload
-    if any(k in updates for k in ("block_ads", "block_iran_sites", "restrict_ips")):
+    # routing-affecting flags and every transport knob require an Xray reload,
+    # because they are baked into the generated config, not read per connection.
+    _RELOAD_KEYS = ("block_ads", "block_iran_sites", "restrict_ips", "vision_enabled",
+                    "sockopt_enabled", "tcp_congestion", "tcp_keepalive_idle",
+                    "tcp_user_timeout", "tcp_mptcp", "sniffing_enabled", "sniffing_route_only",
+                    "xhttp_mode", "xhttp_padding", "xhttp_xmux", "operator_profile",
+                    "reality_dest", "reality_sni", "reality_sid")
+    if any(k in updates for k in _RELOAD_KEYS):
         try:
             xray.write_xray_config()
             xray.restart_xray()
@@ -1932,6 +1966,11 @@ async def sub_plain(uid: str, request: Request):
     kind, target = _sub_target(uid)
     if kind is not None and _wants_html(request):
         return _sub_page_response(kind, target, request)
+    fmt = (request.query_params.get("format") or "").strip().lower()
+    if fmt in subfmt.FORMATS:
+        if kind is None:
+            raise HTTPException(404, "not-found")
+        return _client_config_response(kind, target, request, fmt)
     if kind == "group":
         payload = _group_payload(target, request)
         combined = [c["link"] for c in payload["info"]] + payload["links"]
@@ -1994,6 +2033,146 @@ async def sub_json(uid: str, request: Request):
     }, headers=_for_json(_sub_headers(user)))
 
 
+def _client_cfg_bundle(kind: str, target, request: Request) -> tuple[list[str], dict, dict, str, str]:
+    """(links, settings, headers, title, key) for a user or a group subscription.
+
+    The same link list the base64 body publishes - so an imported config file can
+    only ever contain what the app would have parsed anyway.
+    """
+    settings = _profile_override(request, db.get_settings())
+    if kind == "group":
+        payload = _group_payload(target, request)
+        # payload["info"] is the decorative "0.5/10GB" link. It belongs in the
+        # base64 body (clients use it for the remark) and nowhere near a config
+        # file, where it would become a dead outbound pointing at 127.0.0.1.
+        links = list(payload["links"])
+        return links, settings, _group_headers(target, payload), target.get("name") or "TiTaN", target["skey"]
+    links = _links_for(target, request)["all"]
+    return links, settings, _sub_headers(target), target["name"], target["uid"]
+
+
+def _client_config_response(kind: str, target, request: Request, fmt: str):
+    links, settings, headers, title, key = _client_cfg_bundle(kind, target, request)
+    built = subfmt.render(fmt, links, settings, {"key": key, "title": title})
+    resp = Response(built["text"], media_type=built["media_type"],
+                    headers={**_for_json(headers),
+                             "Content-Disposition": f'attachment; filename="{built["filename"]}"'})
+    # A config file is as private as the subscription link itself.
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
+
+
+@app.get("/sub/{uid}/xray.json")
+async def sub_xray_json(uid: str, request: Request):
+    """A v2rayN/Xray client config: this is how xmux and client sockopt travel."""
+    kind, target = _sub_target(uid)
+    if kind is None:
+        raise HTTPException(404, "not-found")
+    return _client_config_response(kind, target, request, "xray")
+
+
+@app.get("/sub/{uid}/singbox.json")
+async def sub_singbox(uid: str, request: Request):
+    """sing-box / Hiddify config: real TLS fragmentation, uTLS, xudp, routing."""
+    kind, target = _sub_target(uid)
+    if kind is None:
+        raise HTTPException(404, "not-found")
+    return _client_config_response(kind, target, request, "singbox")
+
+
+@app.get("/sub/{uid}/clash.yaml")
+async def sub_clash(uid: str, request: Request):
+    """mihomo/Clash config with rules, fake-ip DNS, sniffer and reuse-settings."""
+    kind, target = _sub_target(uid)
+    if kind is None:
+        raise HTTPException(404, "not-found")
+    return _client_config_response(kind, target, request, "clash")
+
+
+@app.get("/api/tuning")
+async def api_tuning(_: str = Depends(_require_auth)):
+    """What the current profile means, for the settings screen."""
+    return tuning.describe(db.get_settings())
+
+
+@app.post("/api/tuning/apply")
+async def api_tuning_apply(request: Request, _: str = Depends(_require_auth)):
+    """One click: adopt an operator profile, rewrite the Xray config, reload.
+
+    The link-level part (fragment params, xhttp mode) lands on the next fetch; the
+    server-side part (sockopt, sniffing, xhttp buffering) needs an Xray reload and
+    that drops live connections - which is why this is an explicit action and not a
+    side effect of just looking at the page.
+    """
+    payload = await request.json()
+    prof = str(payload.get("profile") or "").strip().lower()
+    if prof not in tuning.PROFILES:
+        raise HTTPException(400, "unknown-profile")
+    db.set_setting("operator_profile", prof)
+    updates = {"operator_profile": prof}
+    for key in ("vision_enabled", "sockopt_enabled", "xhttp_mode", "xhttp_padding",
+                "xhttp_xmux", "tcp_congestion", "wg_keepalive", "wg_mtu"):
+        if key in payload:
+            updates[key] = payload[key]
+    db.set_settings({k: v for k, v in updates.items()
+                     if k in config.DEFAULT_SETTINGS})
+    reloaded = False
+    try:
+        xray.write_xray_config()
+        xray.restart_xray()
+        reloaded = True
+    except Exception as e:  # noqa: BLE001
+        log.warning("xray reload after tuning apply failed: %s", e)
+    db.add_event("info", "tuning-apply", json.dumps(updates, ensure_ascii=False)[:300])
+    return {"ok": True, "reloaded": reloaded, "settings": db.get_settings(),
+            "applied": tuning.describe(db.get_settings())}
+
+
+@app.get("/api/reality/status")
+async def api_reality_status(_: str = Depends(_require_auth)):
+    return {
+        "pub": db.get_settings().get("reality_pub", ""),
+        "sid": db.get_settings().get("reality_sid", ""),
+        "sni": db.get_settings().get("reality_sni", "") or config.REALITY_SNI,
+        "dest": db.get_settings().get("reality_dest", "") or config.REALITY_DEST,
+        "accepting_sids": reality.accepted_short_ids(),
+        "accepting_snis": reality.accepted_server_names(),
+        "candidates": [{"dest": h, "port": p, "note": n} for h, p, n in reality.CANDIDATE_DESTS],
+    }
+
+
+@app.post("/api/reality/suggest")
+async def api_reality_suggest(request: Request, _: str = Depends(_require_auth)):
+    """Measure Reality candidate targets from *this* host. Not the subscriber's view."""
+    return {"ok": True, "results": await reality.suggest(timeout=4.0)}
+
+
+@app.post("/api/reality/rotate")
+async def api_reality_rotate(request: Request, _: str = Depends(_require_auth)):
+    """Rotate shortId / SNI / dest. Old values keep working (grace list)."""
+    payload = await request.json()
+    out: dict = {}
+    if payload.get("short_id") or payload.get("count"):
+        out["short_id"] = reality.rotate_short_id(
+            payload.get("count") or 1, keep_grace=bool(payload.get("keep_grace", True)))
+    if payload.get("sni") or payload.get("dest"):
+        out["sni_dest"] = reality.rotate_sni(
+            str(payload.get("sni") or ""), str(payload.get("dest") or ""),
+            keep_grace=bool(payload.get("keep_grace", True)))
+    if not out:
+        raise HTTPException(400, "nothing-to-rotate")
+    try:
+        xray.write_xray_config()
+        xray.restart_xray()
+    except Exception as e:  # noqa: BLE001
+        log.warning("xray reload after reality rotate failed: %s", e)
+    db.add_event("info", "reality-rotate", json.dumps(out, ensure_ascii=False)[:300])
+    return {"ok": True, **out}
+
+
 @app.get("/sub/{uid}/base64")
 async def sub_base64(uid: str, request: Request):
     kind, target = _sub_target(uid)
@@ -2049,6 +2228,13 @@ def _sub_page_model(kind: str, target: dict, request: Request) -> dict:
             "updated": "",
         }
     model["sub_url"] = f"https://{_public_host(request)}/sub/{model['key']}"
+    # The profile that produced this page, and the URL worth sharing: a subscriber
+    # who copies the link out of an ?profile=mci page must keep getting the MCI
+    # tuning on refresh, not the panel default.
+    prof = (request.query_params.get("profile") or "").strip().lower()
+    model["profile"] = prof if prof in tuning.PROFILES else "general"
+    model["sub_query"] = "" if model["profile"] == "general" else f"?profile={model['profile']}"
+    model["share_url"] = model["sub_url"] + model["sub_query"]
     model["json_path"] = f"/sub/{model['key']}/json"
     model["b64_path"] = f"/sub/{model['key']}/base64"
     model["version"] = APP_VERSION

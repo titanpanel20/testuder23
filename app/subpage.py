@@ -181,18 +181,68 @@ def stamp(ts: int | float | None) -> str:
         return ""
 
 
+#: Which app gets which file. `fmt` is the subfmt key; the routes live in main.py.
+_DOWNLOADS = (
+    ("singbox", "sing-box / Hiddify", "singbox.json"),
+    ("clash", "Clash Meta / mihomo", "clash.yaml"),
+    ("xray", "v2rayN / v2rayNG", "xray.json"),
+)
+_PROFILE_LABELS = {"general": "عمومی", "mci": "همراه اول", "irancell": "ایرانسل"}
+
+
+def _downloads(model: dict) -> list[dict]:
+    """Per-app files, with the page's `?profile=` kept on the URL."""
+    base = (model.get("sub_url") or "").rstrip("/")
+    query = model.get("sub_query") or ""
+    return [{"fmt": fmt, "label": label, "url": f"{base}/{suffix}{query}",
+             "file": f"titan-{fmt}.{suffix.rsplit('.', 1)[-1]}"}
+            for fmt, label, suffix in _DOWNLOADS]
+
+
+def _profiles(model: dict) -> list[dict]:
+    """One URL per operator profile - what the admin hands out as a one-click.
+
+    `?profile=` only changes the *generated file*; nothing stored is touched, so a
+    subscriber can try MCI today and Irancell tomorrow without the admin flipping
+    a global switch.
+    """
+    base = (model.get("sub_url") or "").rstrip("/")
+    active = model.get("profile") or "general"
+    out = []
+    for key, label in _PROFILE_LABELS.items():
+        url = base if key == "general" else f"{base}?profile={key}"
+        out.append({"key": key, "label": label, "url": url, "active": key == active})
+    return out
+
+
+def _notes(model: dict) -> list[str]:
+    notes = list(model.get("config_notes") or [])
+    if not notes:
+        notes = [
+            "اگر اپت گزینهٔ Fragment در تنظیماتش دارد و لینک برایش کاری نکرد، این فایل را import کن.",
+            "فایل‌ها فقط کانفیگِ دستگاه تو را می‌سازند؛ روی سرور چیزی تغییر نمی‌دهند.",
+        ]
+    return notes
+
+
 def decorate(model: dict) -> dict:
     """Fill in the derived view fields (configs, QR, progress, copy text)."""
     links = model.get("links") or []
     want_qr = len(links) <= MAX_QR
     model["configs"] = [link_meta(l, i, with_qr=want_qr) for i, l in enumerate(links)]
-    model["qr"] = qr_data_uri(model.get("sub_url") or "")
+    model.setdefault("share_url", model.get("sub_url") or "")
+    # The QR must encode the same URL the copy button hands over, otherwise a
+    # profile-picked page prints a QR that quietly drops the profile.
+    model["qr"] = qr_data_uri(model.get("share_url") or "")
     model["has_qr"] = bool(model["qr"])
     used = int(model.get("used") or 0)
     total = int(model.get("total") or 0)
     model["pct"] = min(100, round(used * 100 / total)) if total > 0 else 0
     model["expire_date"] = stamp(int(model.get("expire_at") or 0))
     model.setdefault("configs_count", len(model["configs"]))
+    model["downloads"] = _downloads(model)
+    model["profiles"] = _profiles(model)
+    model["notes"] = _notes(model)
     model["used_text"] = humansize(used)
     model["total_text"] = humansize(total) if total else "∞"
     model["left_text"] = humansize(total - used) if total > used else "۰"

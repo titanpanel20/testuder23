@@ -184,9 +184,32 @@
         اگر از گوشی استفاده می‌کنی، به‌جای اسکن «کپی لینک اشتراک» را بزن و
         <b>«Add subscription / لینک اشتراک»</b> را انتخاب کن.
         <div style="margin-top:8px;color:var(--text-3)">
-          لینک: <span dir="ltr" style="color:var(--purple-soft)">{{ model.sub_url }}</span>
+          لینک: <span dir="ltr" style="color:var(--purple-soft)">{{ model.share_url }}</span>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-h">
+      <div>
+        <div class="card-t">کانفیگ آماده برای اپِ من</div>
+        <div class="card-s">این فایل‌ها همان لینک‌هایی هستند که اپ با کپی گرفتن می‌خواند، به‌علاوهٔ تنظیماتی که در URL جا نمی‌شود: شکستن بسته (fragment)، تکثیر استریم (xmux)، MTU و مسیربندی.</div>
+      </div>
+    </div>
+    <div class="sub-actions">
+      {% for d in model.downloads %}
+        <a class="btn" href="{{ d.url }}" download="{{ d.file }}">{{ d.label }}</a>
+      {% endfor %}
+    </div>
+    <div class="sub-actions" style="margin-top:10px">
+      <span class="card-s" style="align-self:center">پروفایل اپراتور:</span>
+      {% for pr in model.profiles %}
+        <a class="btn {% if pr.active %}primary{% else %}ghost{% endif %}" href="{{ pr.url }}">{{ pr.label }}</a>
+      {% endfor %}
+    </div>
+    <div class="note" style="margin-top:12px">
+      {% for n in model.notes %}<div>• {{ n }}</div>{% endfor %}
     </div>
   </section>
 
@@ -251,7 +274,7 @@
 <script>
   (function () {
     const DATA = {
-      url: {{ model.sub_url | tojson }},
+      url: {{ model.share_url | tojson }},
       json: {{ model.json_path | tojson }},
       links: {{ model.links | tojson }}
     };

@@ -12,7 +12,7 @@ import json
 import time
 from urllib.parse import quote
 
-from . import config, sskeys
+from . import config, tuning, sskeys
 
 # transports the panel can actually serve, per protocol
 SERVED_TRANSPORTS = {
@@ -37,13 +37,16 @@ def _transport_for(user: dict, settings: dict) -> str:
 
 
 def _fragment_params(settings: dict) -> dict:
-    """Extra ?params used by v2rayNG's fragment feature when enabled."""
-    if not settings.get("fragment_enabled"):
+    """`?fp_len=&fp_int=`, the only fragment knobs a plain link can carry.
+
+    Mahsa-family apps (MahsaNG/NikaNG) read these; mainstream v2rayNG and sing-box
+    do not - for them the profile reaches the phone through the generated config
+    files in `app/subfmt.py`, which is why those exist.
+    """
+    if not tuning.fragment_in_link(settings):
         return {}
-    return {
-        "fp_len": settings.get("fragment_length", "10-30"),
-        "fp_int": settings.get("fragment_interval", "10-20"),
-    }
+    length, interval = tuning.fragment_values(settings)
+    return {"fp_len": length, "fp_int": interval}
 
 
 def _extra_query(settings: dict) -> str:
@@ -70,6 +73,12 @@ def _host_params(host: str, path: str, sni: str, fp: str, alpn: str,
     ]
     if alpn:
         parts.append(f"alpn={quote(alpn, safe=',/')}")
+    if transport == "xhttp":
+        mode = tuning.xhttp_mode(settings)
+        if mode in tuning.CLIENT_ONLY_MODES:
+            # "auto" is what an omitted mode means, so nothing is appended unless
+            # the operator pinned a shape - published links stay byte-identical.
+            parts.append(f"mode={quote(mode, safe='')}")
     for k, v in _fragment_params(settings).items():
         parts.append(f"{k}={quote(str(v), safe='')}")
     return "&".join(parts)
@@ -98,10 +107,15 @@ def build_vless_link(host: str, port: int, user: dict, settings: dict) -> str:
         sid = quote(user.get("short_id") or settings.get("reality_sid", ""), safe="")
         rsni = settings.get("reality_sni") or sni
         sx = quote(user.get("spider_x", "") or rsni, safe="")
+        # Vision is a raw-TCP thing and server/client must agree: a link that says
+        # `flow=xtls-rprx-vision` against an inbound whose user has no flow (or the
+        # other way round) completes its TLS handshake and then carries garbage.
+        flow = tuning.flow_for(settings, transport="tcp", security="reality")
+        tail = f"&flow={flow}" if flow else ""
         return (
             f"vless://{uuid}@{host}:{port}?encryption=none&security=reality&"
             f"pbk={pk}&sid={sid}&sni={quote(rsni, safe='')}&spx={sx}&fp={fp}&type=tcp&"
-            f"headerType=none&flow=xtls-rprx-vision{_extra_query(settings)}#{name}"
+            f"headerType=none{tail}{_extra_query(settings)}#{name}"
         )
 
     sec = "tls" if security == "tls" else "none"
@@ -197,20 +211,14 @@ def build_ss_link(host: str, port: int, user: dict, settings: dict) -> str:
     return f"ss://{b64}@{host}:{port}#{name}"
 
 
-def build_wg_link(host: str, port: int, user: dict, server_pub: str) -> str:
-    """WireGuard: base64 of the wg-quick config, in a wireguard:// URI."""
-    conf = (
-        "[Interface]\n"
-        f"PrivateKey = {user.get('wg_priv') or ''}\n"
-        f"Address = {user.get('wg_ip') or ''}/32\n"
-        "DNS = 1.1.1.1\n"
-        "\n"
-        "[Peer]\n"
-        f"PublicKey = {server_pub or ''}\n"
-        "AllowedIPs = 0.0.0.0/0, ::/0\n"
-        f"Endpoint = {host}:{port}\n"
-        "PersistentKeepalive = 25\n"
-    )
+def build_wg_link(host: str, port: int, user: dict, server_pub: str,
+                  settings: dict | None = None) -> str:
+    """WireGuard: base64 of the wg-quick config, in a wireguard:// URI.
+
+    Built by `tuning.wg_conf` - the same function behind the downloadable `.conf` -
+    so keepalive/MTU cannot drift between the two delivery paths.
+    """
+    conf = tuning.wg_conf(user, host, port, server_pub, settings or {})
     b64 = base64.b64encode(conf.encode()).decode()
     return f"wireguard://{b64}#{quote('TiTaN-' + user['name'] + '-WG')}"
 
@@ -241,7 +249,7 @@ def build_links(host: str, port: int, user: dict, settings: dict,
     elif user["protocol"] == "hysteria2":
         out["hysteria2"] = build_hy2_link(host, port, user, settings)
     elif user["protocol"] == "wireguard":
-        out["wireguard"] = build_wg_link(host, port, user, server_pub)
+        out["wireguard"] = build_wg_link(host, port, user, server_pub, settings)
 
     all_links = list(out.values())
 

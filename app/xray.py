@@ -7,7 +7,7 @@ import os
 import re
 import subprocess
 
-from . import config, db, sskeys
+from . import config, db, reality, sskeys, tuning
 from . import nodes as nodesync
 
 log = logging.getLogger("titan.xray")
@@ -62,8 +62,17 @@ def generate_xray_config() -> dict:
     users = _xray_users()
     settings = db.get_settings()
 
-    def mk_client(u):
+    def mk_client(u, flow: str = ""):
+        """One `settings.clients[]` entry.
+
+        `flow` is only ever passed for the raw-TCP Reality/TLS VLESS inbound: on
+        WS, gRPC or XHTTP the Vision flow is invalid, and a client that was told
+        to use it against a server that ignores it produces a session that
+        handshakes and then carries garbage.
+        """
         c = {"id": u["uuid"], "email": u["uid"]}
+        if flow:
+            c["flow"] = flow
         if u.get("password"):
             c["password"] = u["password"]
         return c
@@ -74,6 +83,10 @@ def generate_xray_config() -> dict:
         {"password": u["uuid"], "email": u["uid"]}
         for u in users if u["enabled"] and u["protocol"] == "trojan"
     ]
+    def _xhttp_stream() -> dict:
+        """xhttpSettings for the shared inbound, tuned per operator profile."""
+        return tuning.xhttp_server_settings(settings, "/xhttp")
+
     # Shadowsocks users share the ss inbound via method+password pairs.
     ss_users = [u for u in users if u["enabled"] and u["protocol"] == "shadowsocks"]
 
@@ -144,7 +157,7 @@ def generate_xray_config() -> dict:
             "port": config.XRAY_XHTTP_PORT,
             "protocol": "vless",
             "settings": {"clients": xhttp_vless, "decryption": "none"},
-            "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": "/xhttp"}},
+            "streamSettings": {"network": "xhttp", "xhttpSettings": _xhttp_stream()},
             "tag": "in-vless-xhttp",
         })
     if xhttp_vmess:
@@ -153,7 +166,7 @@ def generate_xray_config() -> dict:
             "port": config.XRAY_XHTTP_PORT,
             "protocol": "vmess",
             "settings": {"clients": xhttp_vmess},
-            "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": "/xhttp"}},
+            "streamSettings": {"network": "xhttp", "xhttpSettings": _xhttp_stream()},
             "tag": "in-vmess-xhttp",
         })
 
@@ -258,8 +271,11 @@ def generate_xray_config() -> dict:
                        if u["protocol"] == "vless" and (u.get("security") or "none") == "none"]
     vless_tcp_tls = [mk_client(u) for u in tcp_users
                      if u["protocol"] == "vless" and (u.get("security") or "") == "tls"]
-    vless_tcp_reality = [mk_client(u) for u in tcp_users
-                         if u["protocol"] == "vless" and (u.get("security") or "") == "reality"]
+    vless_tcp_reality = [
+        mk_client(u, flow=tuning.flow_for(settings, transport="tcp", security="reality"))
+        for u in tcp_users
+        if u["protocol"] == "vless" and (u.get("security") or "") == "reality"
+    ]
     vmess_tcp_plain = [mk_client(u) for u in tcp_users
                        if u["protocol"] == "vmess" and (u.get("security") or "none") == "none"]
     vmess_tcp_tls = [mk_client(u) for u in tcp_users
@@ -352,24 +368,24 @@ def generate_xray_config() -> dict:
 
     if vless_tcp_reality:
         priv = db.get_meta("reality_priv")
-        sid = db.get_meta("reality_sid") or ""
-        # serverNames must cover the SNI the links advertise. reality.ensure_keys
-        # seeds the setting from config, but an admin who edits it (or a Railway
-        # redeploy that changes TITAN_REALITY_SNI) would otherwise produce links
-        # Reality rejects outright.
-        snis = sorted({s for s in (config.REALITY_SNI,
-                                   db.get_settings().get("reality_sni") or "") if s})
+        # serverNames must cover the SNI every live link advertises, and shortIds
+        # must cover the ids inside them, or a rotation would silently kill the
+        # configs already handed out. Both lists therefore keep the previous values
+        # accepted (reality.rotate_*) while only the newest one is published.
+        snis = reality.accepted_server_names()
+        short_ids = reality.accepted_short_ids()
+        fb_dest = settings.get("reality_dest") or config.REALITY_DEST
         if priv:
             inbounds.append({
                 "listen": "0.0.0.0", "port": config.XRAY_TCP_VLESS_REALITY_PORT, "protocol": "vless",
                 "settings": {"clients": vless_tcp_reality, "decryption": "none"},
                 "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {
                     "show": False,
-                    "dest": config.REALITY_DEST,
+                    "dest": fb_dest,
                     "xver": 0,
                     "serverNames": snis or [config.REALITY_SNI],
                     "privateKey": priv,
-                    "shortIds": [sid],
+                    "shortIds": short_ids,
                 }},
                 "tag": "in-vless-reality",
             })
@@ -418,6 +434,8 @@ def generate_xray_config() -> dict:
                 "streamSettings": hy2_stream,
                 "tag": "in-hysteria2",
             })
+
+    tuning.apply_to_inbounds(inbounds, settings)
 
     return {
         "log": {"loglevel": "warning"},

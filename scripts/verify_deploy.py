@@ -336,6 +336,42 @@ def main() -> int:
             check("[11m] /sub/<key>/json announces JSON (once said text/plain)",
                   jh.headers.get("content-type", "").startswith("application/json"),
                   jh.headers.get("content-type"))
+            # --- generated client configs: the only way fragment/xmux reach a phone
+            sb = c.get(f"/sub/{skey}/singbox.json")
+            ok_sb = False
+            detail_sb = f"HTTP {sb.status_code}"
+            if sb.status_code == 200:
+                try:
+                    doc = sb.json()
+                    real = [o for o in doc.get("outbounds", []) if o.get("server")]
+                    # The dummy "usage" link must not become an outbound: its uuid
+                    # is all zeroes. (A localhost target is legitimate here, since
+                    # this script is also used to verify a local panel.)
+                    ok_sb = bool(real) and all(
+                        not str(o.get("uuid", "")).startswith("00000000-0000") for o in real)
+                    detail_sb = (f"{len(real)} outbound(s), "
+                                 f"fragment={real[0].get('tls', {}).get('fragment') if real else '-'}")
+                except ValueError as e:
+                    detail_sb = f"not JSON: {e}"
+            check("[11n] /sub/<key>/singbox.json is JSON with real outbounds", ok_sb, detail_sb)
+            cl_gen = c.get(f"/sub/{skey}/clash.yaml?profile=general").text
+            cl_mci = c.get(f"/sub/{skey}/clash.yaml?profile=mci").text
+            check("[11o] the operator profile changes the Clash file (IPv6 + concurrency)",
+                  "ipv6: true" in cl_gen and "ipv6: false" in cl_mci
+                  and "tcp-concurrent: true" in cl_mci,
+                  f"general={'ipv6: true' in cl_gen} mci={'ipv6: false' in cl_mci}")
+            xj = c.get(f"/sub/{skey}/xray.json")
+            check("[11p] /sub/<key>/xray.json answers with JSON (v2rayN import)",
+                  xj.status_code == 200 and isinstance(xj.json().get("outbounds"), list),
+                  f"HTTP {xj.status_code}")
+            anon = httpx.get(f"{BASE}/api/tuning", timeout=8, follow_redirects=False)
+            adm = c.get("/api/tuning")
+            blob = adm.text
+            check("[11q] /api/tuning is admin-only and leaks no key",
+                  anon.status_code in (401, 403) and adm.status_code == 200
+                  and "privateKey" not in blob and "reality_priv" not in blob,
+                  f"anon={anon.status_code} admin={adm.status_code}")
+
             gone = c.get("/sub/sgrotatedaway0000/page")
             check("[11l] a dead key answers with a readable 404 page, not JSON",
                   gone.status_code == 404 and "معتبر نیست" in gone.text, f"HTTP {gone.status_code}")

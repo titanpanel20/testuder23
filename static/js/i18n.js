@@ -106,6 +106,26 @@ const I18N = (() => {
       settings_title: 'تنظیمات', settings_sub: 'پیکربندی عمومی پنل',
       sec_general: 'عمومی', sec_security: 'امنیت', sec_appearance: 'ظاهر',
       sec_notifications: 'اعلان‌ها', sec_network: 'شبکه', sec_system: 'سیستم',
+      sec_tuning: 'بهینه‌سازی حمل‌ونقل و موبایل', sec_reality: 'Reality: Dest و SNI',
+      tune_apply_mci: 'کانفیگ بهینه — همراه اول', tune_apply_irancell: 'کانفیگ بهینه — ایرانسل',
+      tune_apply_general: 'پروفایل عمومی', tune_profile_hint:
+        'پروفایل هم تنظیمات Xray روی سرور و هم فایل‌های کانفیگ کلاینت را تغییر می‌دهد. «اعمال» اتصال‌های زنده را یک‌بار قطع می‌کند، پس دکمهٔ جدا دارد.',
+      tune_tcp_congestion: 'الگوریتم ازدحام', tune_keepalive: 'Keepalive (ثانیه)',
+      tune_usertimeout: 'UserTimeout (میلی‌ثانیه)', tune_xhttp_mode: 'حالت XHTTP (سرور)',
+      tune_xhttp_padding: 'xhttp padding (بایت)', tune_wg_keepalive: 'WireGuard keepalive',
+      tune_wg_mtu: 'WireGuard MTU', tune_operator_profile: 'پروفایل اپراتور',
+      tune_preview: 'پیش‌نمایش چیزی که اعمال می‌شود', tune_applied: 'پروفایل اعمال شد ✓',
+      tune_no_reload: 'Xray ری‌لود نشد', set_vision: 'XTLS Vision روی Reality/TCP',
+      set_vision_hint:
+        'Vision فقط روی TCP خام کار می‌کند (با WS و XHTTP سازگار نیست) و باید در سرور و کلاینت یکی باشد — پنل هر دو را با هم می‌نویسد. روی Railway که TCP خام نداری، لینک Reality به هیچ دردی نمی‌خورد.',
+      set_sockopt: 'sockopt روی همهٔ inboundهای TCP', set_mptcp: 'MPTCP (جابجایی wifi/دیتا)',
+      set_sniffing: 'Sniffing مقصد (فقط برای مسیربندی)', set_xmux: 'xmux در فایل‌های کلاینت Xray',
+      set_client_frag: 'Fragment در فایل‌های کلاینت',
+      reality_dest_note:
+        'این فهرست از همین سرور سنجیده می‌شود، نه از شبکهٔ مشترک. برای سنجش واقعی، لینک را با ?profile=mci یا ?profile=irancell به کاربر بده و بازخوردش را بگیر.',
+      reality_probe: 'سنجش destهای پیشنهادی', reality_rotate_sid: 'چرخش ShortId (با دورهٔ امانت)',
+      reality_rotate_confirm: 'ShortId تازه ساخته شود؟ مقدارهای قبلی مدتی پذیرفته می‌مانند تا لینک‌های موجود نسوزند.',
+      reality_rotated: 'ShortId چرخید',
       sec_backup: 'پشتیبان‌گیری',
       set_public_domain: 'دامنه عمومی (اختیاری)',
       
@@ -114,11 +134,11 @@ const I18N = (() => {
       
       
       set_change_password: 'تغییر رمز عبور', set_old_password: 'رمز عبور فعلی',
-      set_new_password: 'رمز عبور جدید', set_notify_conn: 'اعلان اتصال جدید',
+      set_new_password: 'رمز عبور جدید',
       set_transport: 'پروتکل انتقال پیش‌فرض', set_fingerprint: 'Fingerprint پیش‌فرض',
       set_alpn: 'ALPN پیش‌فرض', set_sni: 'SNI سفارشی (اختیاری)',
       set_fragment: 'فعال‌سازی Fragment',
-      set_fragment_hint: 'این دو عدد به‌صورت `fp_len` و `fp_int` به انتهای لینک اضافه می‌شوند؛ خودِ کلاینت هم باید Fragment را از تنظیماتش روشن کند (v2rayNG/Hiddify: Fragment = tlshello).',
+      set_fragment_hint: 'این دو عدد به‌صورت `fp_len` و `fp_int` به انتهای لینک اضافه می‌شوند و **فقط** MahsaNG/NikaNG آن‌ها را از لینک می‌خوانند؛ v2rayNG و Hiddify نادیده می‌گیرند — برای آن‌ها یا گزینهٔ Fragment را در اپ روشن کن یا فایل sing-box/Clash/v2rayN را از صفحهٔ اشتراک import کن.',
       set_fragment_length: 'طول Fragment', set_fragment_interval: 'بازه Fragment',
       set_restrict_ips: 'مسدودسازی IPهای خصوصی', set_block_ads: 'مسدودسازی تبلیغات',
       set_block_iran: 'مسدودسازی سایت‌های ایرانی',
@@ -277,6 +297,26 @@ const I18N = (() => {
       settings_title: 'Settings', settings_sub: 'General panel configuration',
       sec_general: 'General', sec_security: 'Security', sec_appearance: 'Appearance',
       sec_notifications: 'Notifications', sec_network: 'Network', sec_system: 'System',
+      sec_tuning: 'Transport & mobile tuning', sec_reality: 'Reality: dest and SNI',
+      tune_apply_mci: 'Optimal config — MCI', tune_apply_irancell: 'Optimal config — Irancell',
+      tune_apply_general: 'General profile', tune_profile_hint:
+        'A profile changes both the server-side Xray config and the generated client files. "Apply" drops live connections once, so it is its own button.',
+      tune_tcp_congestion: 'Congestion control', tune_keepalive: 'Keepalive (seconds)',
+      tune_usertimeout: 'UserTimeout (ms)', tune_xhttp_mode: 'XHTTP mode (server)',
+      tune_xhttp_padding: 'xhttp padding (bytes)', tune_wg_keepalive: 'WireGuard keepalive',
+      tune_wg_mtu: 'WireGuard MTU', tune_operator_profile: 'Operator profile',
+      tune_preview: 'Preview what will be applied', tune_applied: 'Profile applied ✓',
+      tune_no_reload: 'Xray was not reloaded', set_vision: 'XTLS Vision on Reality/TCP',
+      set_vision_hint:
+        'Vision only works over raw TCP (not WS or XHTTP) and must match on both ends — the panel writes it on both. On Railway, where you have no raw TCP, a Reality link is useless.',
+      set_sockopt: 'sockopt on every TCP inbound', set_mptcp: 'MPTCP (wifi/cellular handover)',
+      set_sniffing: 'Destination sniffing (routing only)', set_xmux: 'xmux in generated Xray client files',
+      set_client_frag: 'Fragment in client config files',
+      reality_dest_note:
+        'This list is measured from the panel host, not from your subscribers. To measure for real, hand out the link with ?profile=mci or ?profile=irancell and collect their feedback.',
+      reality_probe: 'Probe suggested dests', reality_rotate_sid: 'Rotate ShortId (with grace)',
+      reality_rotate_confirm: 'Mint a new ShortId? The old ones stay accepted for a while so existing links do not die.',
+      reality_rotated: 'ShortId rotated',
       sec_backup: 'Backup',
       set_public_domain: 'Public domain (optional)',
       
@@ -285,11 +325,11 @@ const I18N = (() => {
       
       
       set_change_password: 'Change password', set_old_password: 'Current password',
-      set_new_password: 'New password', set_notify_conn: 'Notify on new connection',
+      set_new_password: 'New password',
       set_transport: 'Default transport', set_fingerprint: 'Default fingerprint',
       set_alpn: 'Default ALPN', set_sni: 'Custom SNI (optional)',
       set_fragment: 'Enable Fragment',
-      set_fragment_hint: 'These two numbers are appended to the link as `fp_len` / `fp_int`; the client must also enable Fragment itself (v2rayNG/Hiddify: Fragment = tlshello).',
+      set_fragment_hint: 'These two numbers are appended to the link as `fp_len` / `fp_int` and are read **only** by MahsaNG/NikaNG; v2rayNG and Hiddify ignore them — either enable Fragment in the app, or import the sing-box/Clash/v2rayN file from the subscription page.',
       set_fragment_length: 'Fragment length', set_fragment_interval: 'Fragment interval',
       set_restrict_ips: 'Block private IPs', set_block_ads: 'Block ads',
       set_block_iran: 'Block Iranian sites',

@@ -1465,12 +1465,58 @@
             </div>
           </div>
         </div>
+        <div class="panel"><div class="panel-head"><div class="panel-title" data-i18n="sec_tuning"></div></div>
+          <div class="panel-body">
+            <div class="row" style="gap:8px;flex-wrap:wrap">
+              <button class="btn" data-apply-profile="mci"><span data-i18n="tune_apply_mci"></span></button>
+              <button class="btn" data-apply-profile="irancell"><span data-i18n="tune_apply_irancell"></span></button>
+              <button class="btn ghost" data-apply-profile="general"><span data-i18n="tune_apply_general"></span></button>
+            </div>
+            <div class="cell-sub" style="margin-top:8px" data-i18n="tune_profile_hint"></div>
+            <div class="grid-form mt" style="gap:0 14px">
+              <label class="field"><span class="field-label" data-i18n="tune_tcp_congestion"></span>
+                <select class="select" data-key="tcp_congestion">${['bbr','cubic','reno',''].map(o => `<option value="${o}" ${String(s.tcp_congestion ?? 'bbr') === o ? 'selected' : ''}>${esc(o || '—')}</option>`).join('')}</select></label>
+              <label class="field"><span class="field-label" data-i18n="tune_xhttp_mode"></span>
+                <select class="select" data-key="xhttp_mode">${['auto','packet-up','stream-up','stream-one'].map(o => `<option value="${o}" ${(s.xhttp_mode || 'auto') === o ? 'selected' : ''}>${o}</option>`).join('')}</select></label>
+              <label class="field"><span class="field-label" data-i18n="tune_keepalive"></span>
+                <input class="input" type="number" min="5" max="600" data-key="tcp_keepalive_idle" value="${esc(s.tcp_keepalive_idle ?? 30)}"></label>
+              <label class="field"><span class="field-label" data-i18n="tune_usertimeout"></span>
+                <input class="input" type="number" min="2000" max="130000" data-key="tcp_user_timeout" value="${esc(s.tcp_user_timeout ?? 10000)}"></label>
+              <label class="field"><span class="field-label" data-i18n="tune_xhttp_padding"></span>
+                <input class="input" data-key="xhttp_padding" placeholder="100-1000" value="${esc(s.xhttp_padding || '')}" dir="ltr"></label>
+              <label class="field"><span class="field-label" data-i18n="tune_wg_keepalive"></span>
+                <input class="input" type="number" min="0" max="300" data-key="wg_keepalive" value="${esc(s.wg_keepalive ?? 25)}"></label>
+              <label class="field"><span class="field-label" data-i18n="tune_wg_mtu"></span>
+                <input class="input" type="number" min="0" max="1420" data-key="wg_mtu" value="${esc(s.wg_mtu ?? 1280)}"></label>
+              <label class="field"><span class="field-label" data-i18n="tune_operator_profile"></span>
+                <select class="select" data-key="operator_profile">${[['general','عمومی'],['mci','همراه اول (MCI)'],['irancell','ایرانسل']].map(([v,l]) => `<option value="${v}" ${(s.operator_profile || 'general') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+            </div>
+            ${sw('vision_enabled', 'set_vision')}
+            ${sw('sockopt_enabled', 'set_sockopt')}
+            ${sw('tcp_mptcp', 'set_mptcp')}
+            ${sw('sniffing_enabled', 'set_sniffing')}
+            ${sw('xhttp_xmux', 'set_xmux')}
+            ${sw('client_fragment_enabled', 'set_client_frag')}
+            <div class="cell-sub" style="margin-top:8px" data-i18n="set_vision_hint"></div>
+            <button class="btn mt" id="tunePreviewBtn">${ICONS.refresh || ''}<span data-i18n="tune_preview"></span></button>
+            <pre id="tunePreview" class="cell-sub" style="white-space:pre-wrap;word-break:break-all;margin-top:8px;padding:10px;background:var(--bg-2,rgba(255,255,255,.03));border-radius:10px;direction:ltr;text-align:left" hidden></pre>
+          </div>
+        </div>
+        <div class="panel"><div class="panel-head"><div class="panel-title" data-i18n="sec_reality"></div></div>
+          <div class="panel-body">
+            <div class="cell-sub" data-i18n="reality_dest_note"></div>
+            <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
+              <button class="btn" id="realityProbeBtn"><span data-i18n="reality_probe"></span></button>
+              <button class="btn" id="realityRotateBtn"><span data-i18n="reality_rotate_sid"></span></button>
+            </div>
+            <div id="realityOut" class="cell-sub" style="margin-top:10px;direction:ltr;text-align:left" hidden></div>
+          </div>
+        </div>
         <div class="panel"><div class="panel-head"><div class="panel-title" data-i18n="sec_system"></div></div>
           <div class="panel-body">
             ${sw('restrict_ips', 'set_restrict_ips')}
             ${sw('block_ads', 'set_block_ads')}
             ${sw('block_iran_sites', 'set_block_iran')}
-            ${sw('notify_new_conn', 'set_notify_conn')}
             ${sw('fragment_enabled', 'set_fragment')}
             <div class="grid-form mt" style="gap:0 14px">
               <label class="field"><span class="field-label" data-i18n="set_fragment_length"></span><input class="input" data-key="fragment_length" value="${esc(s.fragment_length)}"></label>
@@ -1500,6 +1546,40 @@
       try {
         await U.apiJson('/api/settings', { method: 'POST', body: JSON.stringify(body) });
         U.toast(I18N.t('settings_saved'), 'ok');
+      } catch (e) { U.toast(e.message, 'err'); }
+    });
+    $$('[data-apply-profile]', view).forEach(btn => btn.addEventListener('click', async () => {
+      const profile = btn.dataset.applyProfile;
+      btn.disabled = true;
+      try {
+        const r = await U.apiJson('/api/tuning/apply', { method: 'POST', body: JSON.stringify({ profile }) });
+        U.toast(I18N.t('tune_applied') + (r.reloaded ? '' : ' · ' + I18N.t('tune_no_reload')), 'ok');
+        settingsPage(view);
+      } catch (e) { U.toast(e.message, 'err'); btn.disabled = false; }
+    }));
+    $('#tunePreviewBtn').addEventListener('click', async () => {
+      const box = $('#tunePreview');
+      try {
+        box.hidden = false;
+        box.textContent = JSON.stringify(await U.apiJson('/api/tuning'), null, 2);
+      } catch (e) { box.hidden = true; U.toast(e.message, 'err'); }
+    });
+    $('#realityProbeBtn').addEventListener('click', async () => {
+      const out = $('#realityOut');
+      out.hidden = false; out.textContent = I18N.t('loading');
+      try {
+        const r = await U.apiJson('/api/reality/suggest', { method: 'POST', body: '{}' });
+        out.innerHTML = r.results.map(x => `<div style="padding:4px 0">${x.ok ? '✅' : '⛔'} <b>${esc(x.dest)}</b> · ${x.handshake_ms ?? '—'}ms · TLS ${x.tls13 ? '1.3' : '—'} · ${esc(x.alpn || '—')} · ${esc(x.reason || x.note || '')}</div>`).join('');
+      } catch (e) { out.textContent = e.message; }
+    });
+    $('#realityRotateBtn').addEventListener('click', async () => {
+      const out = $('#realityOut');
+      if (!confirm(I18N.t('reality_rotate_confirm'))) return;
+      try {
+        const r = await U.apiJson('/api/reality/rotate', { method: 'POST', body: JSON.stringify({ count: 1 }) });
+        out.hidden = false;
+        out.textContent = I18N.t('reality_rotated') + ': ' + (r.short_id.sid || '') +
+          ' · accepting ' + (r.short_id.accepting || []).join(',');
       } catch (e) { U.toast(e.message, 'err'); }
     });
     $('#changePassBtn').addEventListener('click', async () => {

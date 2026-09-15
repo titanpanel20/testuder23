@@ -19,7 +19,7 @@ import logging
 import os
 import subprocess
 
-from . import config, db
+from . import config, db, tuning
 from . import nodes as nodesync
 
 log = logging.getLogger("titan.wg")
@@ -121,18 +121,9 @@ def ensure_user_keys(u: dict) -> dict:
 
 def client_conf(u: dict, host: str, port: int, server_pub: str,
                 dns: str = "1.1.1.1") -> str:
-    return (
-        "[Interface]\n"
-        f"PrivateKey = {u.get('wg_priv') or ''}\n"
-        f"Address = {u.get('wg_ip') or ''}/32\n"
-        f"DNS = {dns}\n"
-        "\n"
-        "[Peer]\n"
-        f"PublicKey = {server_pub}\n"
-        "AllowedIPs = 0.0.0.0/0, ::/0\n"
-        f"Endpoint = {host}:{port}\n"
-        "PersistentKeepalive = 25\n"
-    )
+    """The downloadable client file. Same builder as the `wireguard://` link, so
+    the two can never disagree about keepalive or MTU."""
+    return tuning.wg_conf(u, host, port, server_pub, db.get_settings(), dns=dns)
 
 
 def server_config(users: list[dict]) -> str:

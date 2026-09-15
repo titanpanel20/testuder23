@@ -468,6 +468,64 @@ curl -s -X POST https://<panel>/api/nodes/detect -H "Cookie: $CK" -H 'Content-Ty
   مستعار بگذار (در «کاربرها → نام»).
 
 
+## ۱۱.۵) پروفایل اپراتور، Vision و تنظیمات حمل‌ونقل (اثر مستقیم روی پینگ)
+
+این بخش تنها قسمت پنل است که **عدد پینگ** را تغییر می‌دهد؛ بقیه فقط مدیریت است.
+
+### باگی که همین‌جا درست شد (اول بخوان)
+پنل در لینک‌های Reality همیشه `flow=xtls-rprx-vision` می‌نوشت، ولی در `config.json`
+سمت سرور هرگز `flow` برای کاربر نوشته نمی‌شد. Vision یک قرارداد **دوطرفه** است: یک
+طرف با padding و یک طرف بدون آن = دست‌دهش TLS موفق و بعد ترافیک بی‌معنی («وصله ولی
+نت نداره»). حالا `app/tuning.py::flow_for` تنها مرجع ساختن `flow` است و هر دو سمت از
+همان یک تابع می‌خوانند؛ تست‌های `tests/test_vision_and_tuning.py` همین قرارداد را
+pin می‌کنند (اگر یک طرف روشن و طرف دیگر خاموش شود، تست می‌شکند).
+
+### پروفایل‌ها
+| پروفایل | سمت سرور (Xray) | سمت کلاینت (فایل تولیدی) |
+|---|---|---|
+| عمومی | `sockopt` استاندارد: bbr + TFO + `tcpNoDelay` + keepalive 30 + UserTimeout 10s | fragment تهاجمی نه، MTU ۱۲۸۰ |
+| همراه اول (MCI) | همان + `domainStrategy: UseIPv4` | ALPN بدون `h3`، `mode: stream-up`، prefer_ipv4 در DNS |
+| ایرانسل | همان + `UseIPv4` | fragment تهاجمی + `record_fragment`، `mode: packet-up`، keepalive 15 |
+
+در `sockopt` عمداً هیچ `tcpMss` / `tcpRecvWindow`clamp نمی‌گذاریم؛ 3x-ui این را گذاشت و
+در لینک‌های طولی گیر کرد و پس گرفت (`7c81d9c`). BBR هم نیاز به ماژول کرنل هاست دارد —
+روی container اشتراکی ممکن است نادیده گرفته شود؛ **اندازه بگیر، قبول نکن**.
+
+### دکمهٔ یک‌کلیکی
+در تنظیمات → «بهینه‌سازی حمل‌ونقل و موبایل» → «کانفیگ بهینه — همراه اول / ایرانسل».
+هرچه می‌کند: `operator_profile` را ذخیره می‌کند، `config.json` را بازنویسی و Xray را
+ری‌لود می‌کند (پس اتصال‌های زنده یک‌بار می‌پرند؛ به همین دلیل دکمهٔ جدا دارد).
+پیش‌نمایش دقیق چیزی که اعمال می‌شود: `GET /api/tuning`.
+
+برای مشترک، همان پروفایل را می‌توان بدون دست‌زدن به سرور تست کرد:
+
+```text
+https://panel.example/sub/<key>?profile=mci          # لینک‌ها با tuning همان اپراتور
+https://panel.example/sub/<key>/singbox.json?profile=irancell
+```
+
+`?profile=` **هیچ‌چیز را ذخیره نمی‌کند** — فقط همان درخواست را با آن پروفایل تولید
+می‌کند. این تنها راهِ امن برای A/B روی چند کاربر است.
+
+### سه فرمت خروجی (چون لینک URL نمی‌تواند fragment و xmux را برساند)
+| فایل | برای چه اپ‌هایی | چه چیزی اضافه می‌کند که لینک ندارد |
+|---|---|---|
+| `singbox.json` | sing-box، Hiddify، FlClash | `tls.fragment` + `record_fragment` + `utls` + `packet_encoding: xudp` + rules و `sniff` |
+| `clash.yaml` | Clash Meta / mihomo، NekoBox | `flow`، `packet-encoding`، `xhttp-opts.reuse-settings` (همان xmux)، fake-ip DNS، `tcp-concurrent`، rules IR |
+| `xray.json` | v2rayN، v2rayNG، MahsaNG | `extra.xmux` کامل، `xPaddingBytes`، `sockopt` سمت کلاینت، `sniffing` |
+
+`Profile-Update-Interval` و `fp_len/fp_int` را فراموش کن اگر اپت Mahsa نیست:
+v2rayNG این پارامترها را از لینک نمی‌خواند (2dust/v2rayNG#3078 و #3438). برای همین
+این فایل‌ها وجود دارند. صفحهٔ `/sub/<key>` دکمه‌هایشان را گذاشته است.
+
+### Reality: انتخاب dest و چرخش
+`GET /api/reality/status` وضعیت فعلی + فهرست نامزدها را می‌دهد،
+`POST /api/reality/suggest` هر نامزد را **از همین سرور** می‌سنجد (TLS 1.3؟ X25519؟
+چند میلی‌ثانیه؟) و `POST /api/reality/rotate` با `{"count":1}` ShortId تازه می‌سازد.
+چرخش، لینک‌های موجود را نمی‌کشد: `shortIds` و `serverNames` لیست‌اند و مقدارهای قبلی
+در «لیست پذیرش» می‌مانند. سنجش از سرور ≠ سنجش از شبکهٔ مشترک؛ برای دومی، لینک را با
+`?profile=` بده و بازخورد بگیر.
+
 ## ۱۲) کلیدهایی که حذف شدند (و چرا)
 
 در بازرسی کامل، چند کلید در `DEFAULT_SETTINGS` پیدا شد که **هیچ‌جا خوانده نمی‌شدند**
